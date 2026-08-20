@@ -71,16 +71,19 @@ async function fetchDodgersArticles() {
       const lowerHref = href.toLowerCase();
 
       // BỘ LỌC CHẶT CHẼ DÀNH RIÊNG CHO DODGERS:
-      // 1. URL PHẢI chứa 'dodgers' (Loại sạch menu 29 đội còn lại, năm archive, các trận đội khác ở Sidebar)
+      // 1. URL PHẢI chứa 'dodgers'
       if (!lowerHref.includes('dodgers')) return;
 
       // 2. URL PHẢI chứa 'full-game-replay'
       if (!lowerHref.includes('full-game-replay')) return;
 
-      // 3. LOẠI BỎ chính trang danh mục Dodgers gốc
+      // 3. LOẠI BỎ các link kết thúc bằng 'mlb' hoặc '-mlb'
+      if (urlSlug.endsWith('mlb')) return;
+
+      // 4. LOẠI BỎ chính trang danh mục Dodgers gốc
       if (urlSlug === 'los-angeles-dodgers-full-game-replay') return;
 
-      // 4. LOẠI BỎ các đường dẫn phân trang, category, tag
+      // 5. LOẠI BỎ phân trang, category, tag
       if (lowerHref.includes('/category/') || lowerHref.includes('/page/') || lowerHref.includes('/tag/')) return;
 
       if (seenHrefs.has(href)) return;
@@ -155,7 +158,7 @@ app.get(['/', '/configure'], (req, res) => {
 app.get('/manifest.json', (req, res) => {
   res.json({
     id: 'org.dodgersreplays.gmt7.nhontruong.addon',
-    version: '3.2.0',
+    version: '3.3.0',
     name: 'Dodgers Replays',
     description: 'Tổng hợp toàn bộ trận đấu Replay của Los Angeles Dodgers',
     resources: [
@@ -232,7 +235,7 @@ app.get('/meta/*', async (req, res) => {
   }
 });
 
-// 4. Stream Endpoint
+// 4. Stream Endpoint (Lấy link video stream & Log chi tiết)
 app.get('/stream/*', async (req, res) => {
   try {
     const cleanId = extractCleanId(req);
@@ -248,7 +251,7 @@ app.get('/stream/*', async (req, res) => {
     }
 
     console.log(`\n========================================`);
-    console.log(`[STREAM REQUEST] Lấy video tập #${epNum} (${targetArticle.title})\nURL: ${targetArticle.href}`);
+    console.log(`[STREAM REQUEST] Lấy video tập #${epNum} (${targetArticle.title})\nBài viết URL: ${targetArticle.href}`);
 
     const { data } = await axios.get(targetArticle.href, { headers: HTTP_HEADERS, timeout: 8000 });
     const $ = cheerio.load(data);
@@ -279,10 +282,13 @@ app.get('/stream/*', async (req, res) => {
             }
           }
         });
+
+        // IN LOG TRỰC TIẾP LINK VIDEO VỪA CÀO ĐƯỢC
+        console.log(` ➔ [STREAM LINK #${index + 1}] (${serverName}): ${src}`);
       }
     });
 
-    console.log(`[STREAM SUCCESS] Tìm thấy ${streams.length} luồng stream.`);
+    console.log(`[STREAM SUCCESS] Tìm thấy tổng cộng ${streams.length} luồng stream.`);
     console.log(`========================================\n`);
 
     res.json({ streams });
@@ -293,4 +299,4 @@ app.get('/stream/*', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 7000;
-app.listen(PORT, () => console.log(`Dodgers Replays Addon v3.2.0 running at http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`Dodgers Replays Addon v3.3.0 running at http://localhost:${PORT}`));
