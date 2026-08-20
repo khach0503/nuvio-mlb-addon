@@ -6,9 +6,9 @@ const cheerio = require('cheerio');
 const app = express();
 app.use(cors());
 
-// Tắt Cache client để Nuvio luôn nhận danh sách mới nhất
+// Tắt hoàn toàn Cache phía Client/Proxy
 app.use((req, res, next) => {
-  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
   next();
@@ -17,8 +17,6 @@ app.use((req, res, next) => {
 app.use(express.static(__dirname));
 
 const DODGERS_URL = 'https://mlblive.net/los-angeles-dodgers-full-game-replay';
-let articlesCache = { data: [], lastFetch: 0 };
-const CACHE_DURATION = 10 * 60 * 1000; // Cache 10 phút
 
 function getPosterUrl(req) {
   return `${req.protocol}://${req.get('host')}/poster.jpg`;
@@ -34,21 +32,31 @@ function extractCleanId(req) {
   }
 }
 
+// Hàm trích xuất ngày từ tiêu đề trận đấu
+function parseReleaseDate(title) {
+  try {
+    const match = title.match(/(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}/i);
+    if (match) {
+      const parsedDate = new Date(match[0]);
+      if (!isNaN(parsedDate.getTime())) {
+        return parsedDate.toISOString();
+      }
+    }
+  } catch (e) {}
+  return new Date().toISOString(); // Nếu không tìm thấy thì lấy ngày hiện tại
+}
+
 const HTTP_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
   'Referer': 'https://mlblive.net/'
 };
 
+// Cào trực tiếp không dùng Cache để luôn cập nhật trận mới nhất
 async function fetchDodgersArticles() {
-  const now = Date.now();
-  if (articlesCache.data.length > 0 && (now - articlesCache.lastFetch) < CACHE_DURATION) {
-    return articlesCache.data;
-  }
-
   try {
     console.log(`\n========================================`);
-    console.log(`[SCRAPE START] Đang cào danh sách trận đấu Dodgers từ:\n${DODGERS_URL}`);
+    console.log(`[SCRAPE REFRESH] Đang cào danh sách mới nhất từ:\n${DODGERS_URL}`);
     
     const { data } = await axios.get(DODGERS_URL, { headers: HTTP_HEADERS, timeout: 8000 });
     const $ = cheerio.load(data);
@@ -70,20 +78,10 @@ async function fetchDodgersArticles() {
       const urlSlug = cleanHref.split('/').pop().toLowerCase();
       const lowerHref = href.toLowerCase();
 
-      // BỘ LỌC CHẶT CHẼ DÀNH RIÊNG CHO DODGERS:
-      // 1. URL PHẢI chứa 'dodgers'
       if (!lowerHref.includes('dodgers')) return;
-
-      // 2. URL PHẢI chứa 'full-game-replay'
       if (!lowerHref.includes('full-game-replay')) return;
-
-      // 3. LOẠI BỎ các link kết thúc bằng 'mlb' hoặc '-mlb'
       if (urlSlug.endsWith('mlb')) return;
-
-      // 4. LOẠI BỎ chính trang danh mục Dodgers gốc
       if (urlSlug === 'los-angeles-dodgers-full-game-replay') return;
-
-      // 5. LOẠI BỎ phân trang, category, tag
       if (lowerHref.includes('/category/') || lowerHref.includes('/page/') || lowerHref.includes('/tag/')) return;
 
       if (seenHrefs.has(href)) return;
@@ -98,17 +96,16 @@ async function fetchDodgersArticles() {
       articles.push({ title, href, img });
     });
 
-    console.log(`[SCRAPE SUCCESS] Cào thành công ${articles.length} trận đấu chuẩn Dodgers:`);
+    console.log(`[SCRAPE SUCCESS] Cào thành công ${articles.length} trận đấu Dodgers:`);
     articles.forEach((art, index) => {
       console.log(`   ${index + 1}. [${art.title}] -> ${art.href}`);
     });
     console.log(`========================================\n`);
 
-    articlesCache = { data: articles, lastFetch: now };
     return articles;
   } catch (err) {
     console.error(`❌ [SCRAPE ERROR]:`, err.message);
-    return articlesCache.data;
+    return [];
   }
 }
 
@@ -158,7 +155,7 @@ app.get(['/', '/configure'], (req, res) => {
 app.get('/manifest.json', (req, res) => {
   res.json({
     id: 'org.dodgersreplays.gmt7.nhontruong.addon',
-    version: '3.3.0',
+    version: '3.4.0',
     name: 'Dodgers Replays',
     description: 'Tổng hợp toàn bộ trận đấu Replay của Los Angeles Dodgers',
     resources: [
@@ -192,11 +189,9 @@ app.get('/catalog/*', (req, res) => {
       }
     ]
   });
-
-  fetchDodgersArticles().catch(() => {});
 });
 
-// 3. Meta Endpoint
+// 3. Meta Endpoint (Luôn cào mới + Tự trích xuất ngày trận đấu)
 app.get('/meta/*', async (req, res) => {
   try {
     const posterUrl = getPosterUrl(req);
@@ -205,18 +200,20 @@ app.get('/meta/*', async (req, res) => {
 
     articles.forEach((art, index) => {
       const epNum = index + 1;
+      const releaseDate = parseReleaseDate(art.title); // Trích xuất ngày chuẩn từ tiêu đề
+
       videos.push({
         id: `dodgers_main:1:${epNum}`,
         title: art.title,
         season: 1,
         episode: epNum,
-        released: '2020-01-01T00:00:00.000Z',
+        released: releaseDate,
         thumbnail: art.img,
         overview: art.title
       });
     });
 
-    console.log(`[META REQUEST] Trả về ${videos.length} trận đấu Dodgers cho Nuvio!`);
+    console.log(`[META REQUEST] Trả về ${videos.length} trận đấu mới nhất cho Nuvio!`);
 
     res.json({
       meta: {
@@ -235,7 +232,7 @@ app.get('/meta/*', async (req, res) => {
   }
 });
 
-// 4. Stream Endpoint (Lấy link video stream & Log chi tiết)
+// 4. Stream Endpoint (Biến đổi link OK.ru videoembed -> video)
 app.get('/stream/*', async (req, res) => {
   try {
     const cleanId = extractCleanId(req);
@@ -265,6 +262,11 @@ app.get('/stream/*', async (req, res) => {
           src = 'https:' + src;
         }
 
+        // BIẾN ĐỔI LINK OK.RU: Chuyển /videoembed/ thành /video/
+        if (src.includes('ok.ru/videoembed/')) {
+          src = src.replace('ok.ru/videoembed/', 'ok.ru/video/');
+        }
+
         let serverName = `Server #${index + 1}`;
         if (src.includes('ok.ru')) {
           serverName = `⚾ OK.ru Direct #${index + 1}`;
@@ -283,7 +285,6 @@ app.get('/stream/*', async (req, res) => {
           }
         });
 
-        // IN LOG TRỰC TIẾP LINK VIDEO VỪA CÀO ĐƯỢC
         console.log(` ➔ [STREAM LINK #${index + 1}] (${serverName}): ${src}`);
       }
     });
@@ -299,4 +300,4 @@ app.get('/stream/*', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 7000;
-app.listen(PORT, () => console.log(`Dodgers Replays Addon v3.3.0 running at http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`Dodgers Replays Addon v3.4.0 running at http://localhost:${PORT}`));
