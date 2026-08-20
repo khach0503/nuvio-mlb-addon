@@ -26,7 +26,7 @@ const MLB_TEAMS = [
   'Toronto Blue Jays', 'Washington Nationals'
 ];
 
-// Từ khóa tìm kiếm thông minh cho từng đội bóng (tránh lỗi viết tắt trên mlblive.net)
+// Từ khóa tìm kiếm thông minh cho từng đội bóng
 const TEAM_KEYWORDS = {
   'Arizona Diamondbacks': ['diamondbacks', 'd-backs', 'arizona'],
   'Atlanta Braves': ['braves', 'atlanta'],
@@ -73,6 +73,12 @@ function parseConfig(configStr) {
   }
 }
 
+const HTTP_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Referer': 'https://mlblive.net/'
+};
+
 // 1. Giao diện Cấu hình
 app.get(['/', '/configure', '/:config', '/:config/configure'], (req, res) => {
   const config = parseConfig(req.params.config);
@@ -105,7 +111,7 @@ app.get(['/', '/configure', '/:config', '/:config/configure'], (req, res) => {
     <body>
       <div class="card">
         <h2>⚾ MLB Replays from Nhon Truong</h2>
-        <p>Tích chọn các đội bóng bạn muốn xem (Nếu không chọn đội nào, addon sẽ hiển thị tất cả các trận):</p>
+        <p>Chọn các đội bóng m muốn theo dõi (Mỗi đội sẽ tạo thành 1 Season trong Nuvio):</p>
         <form id="configForm">
           <div style="max-height: 300px; overflow-y: auto; background: #252525; padding: 10px; border-radius: 5px;">
             ${teamCheckboxes}
@@ -113,7 +119,7 @@ app.get(['/', '/configure', '/:config', '/:config/configure'], (req, res) => {
           <button type="button" onclick="generateLink()">Tạo Link Cài Đặt Nuvio</button>
         </form>
         <div id="result" class="output">
-          <p style="margin: 0 0 5px 0; color: #aaa;">Copy link bên dưới và dán vào phần Addons của Nuvio:</p>
+          <p style="margin: 0 0 5px 0; color: #aaa;">Copy link bên dưới dán vào Nuvio:</p>
           <strong id="manifestUrl" style="color: #00f0ff;"></strong>
         </div>
       </div>
@@ -149,15 +155,15 @@ app.get(['/manifest.json', '/:config/manifest.json'], (req, res) => {
 
   res.json({
     id: 'org.mlblive.gmt7.nhontruong.addon',
-    version: '1.3.1',
+    version: '1.4.0',
     name: `MLB Replays from Nhon Truong${nameExtra}`,
-    description: 'Replay MLB cập nhật realtime theo giờ Việt Nam (GMT+7) và lọc theo đội bóng chọn lọc',
+    description: 'Trung tâm tổng hợp Replay MLB phân loại theo đội bóng',
     behaviorHints: { configurable: true, configurationRequired: false },
     resources: ['catalog', 'meta', 'stream'],
-    types: ['movie'],
+    types: ['series'],
     catalogs: [
       {
-        type: 'movie',
+        type: 'series',
         id: 'mlblive_catalog',
         name: 'MLB Replays'
       }
@@ -165,25 +171,33 @@ app.get(['/manifest.json', '/:config/manifest.json'], (req, res) => {
   });
 });
 
-// Helper HTTP Headers chống bị mlblive.net chặn
-const HTTP_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-  'Accept-Language': 'en-US,en;q=0.9',
-  'Referer': 'https://mlblive.net/'
-};
+// 3. Catalog Endpoint (Chỉ trả về ĐÚNG 1 THẺ HUB tĩnh - Tốc độ siêu nhanh, không bao giờ lỗi)
+app.get(['/catalog/*', '/:config/catalog/*'], (req, res) => {
+  res.json({
+    metas: [
+      {
+        id: 'mlb_replays_hub',
+        type: 'series',
+        name: '⚾ MLB Replays Hub',
+        poster: 'https://images.unsplash.com/photo-1508802913283-77c8e63a151b?w=600&auto=format&fit=crop',
+        background: 'https://images.unsplash.com/photo-1508802913283-77c8e63a151b?w=1200&auto=format&fit=crop',
+        description: 'Bấm vào đây để chọn và xem danh sách các trận đấu Replay theo từng đội bóng.'
+      }
+    ]
+  });
+});
 
-// 3. Dynamic Catalog Endpoint (Hứng tất cả các dạng request từ Nuvio)
-app.get(['/catalog/*', '/:config/catalog/*'], async (req, res) => {
+// 4. Meta Endpoint (Bấm vào Hub mới bắt đầu cào dữ liệu và phân chia từng Tab đội bóng)
+app.get(['/meta/*', '/:config/meta/*'], async (req, res) => {
   try {
     const config = parseConfig(req.params.config);
     const selectedTeams = (config && config.teams) ? config.teams : [];
 
-    console.log(`[CATALOG] Đang tải bài viết từ mlblive.net... (Đội đã chọn: ${selectedTeams.length})`);
+    console.log(`[META] Đang tải danh sách trận đấu cho Hub... (Đội đã chọn: ${selectedTeams.length})`);
 
     const { data } = await axios.get('https://mlblive.net/', { headers: HTTP_HEADERS });
     const $ = cheerio.load(data);
-    const metas = [];
+    const articles = [];
 
     $('article, .post, .entry, .item, .card, div[class*="post"]').each((_, el) => {
       const titleEl = $(el).find('h1 a, h2 a, h3 a, .entry-title a, .title a').first();
@@ -199,83 +213,93 @@ app.get(['/catalog/*', '/:config/catalog/*'], async (req, res) => {
                 $(el).find('img').attr('src');
 
       if (title && href) {
-        // Kiểm tra lọc đội bóng theo từ khóa mở rộng
-        if (selectedTeams.length > 0) {
-          const titleLower = title.toLowerCase();
-          const matchFound = selectedTeams.some(teamName => {
-            const keywords = TEAM_KEYWORDS[teamName] || [teamName.toLowerCase()];
-            return keywords.some(kw => titleLower.includes(kw));
-          });
-
-          if (!matchFound) return;
-        }
-
         const dateMatch = title.match(/(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}/i);
         let dateVNText = 'Không rõ ngày';
+        let dateISO = new Date().toISOString();
         if (dateMatch) {
           const parsedDate = dayjs.tz(dateMatch[0], 'MMMM D, YYYY', 'America/New_York');
           if (parsedDate.isValid()) {
             dateVNText = parsedDate.tz('Asia/Ho_Chi_Minh').format('DD/MM/YYYY');
+            dateISO = parsedDate.toISOString();
           }
         }
 
-        if (img && !img.startsWith('http')) {
-          img = `https://mlblive.net${img}`;
-        }
+        if (img && !img.startsWith('http')) img = `https://mlblive.net${img}`;
 
-        const id = Buffer.from(href).toString('base64');
-
-        metas.push({
-          id: id,
-          type: 'movie',
-          name: title,
-          poster: img || '',
-          description: `📅 Ngày đấu (Giờ VN): ${dateVNText}\nNguồn: mlblive.net | Addon by Nhon Truong`
+        articles.push({
+          id: Buffer.from(href).toString('base64'),
+          title,
+          href,
+          img: img || '',
+          dateVNText,
+          dateISO
         });
       }
     });
 
-    console.log(`[CATALOG] Tìm thấy ${metas.length} trận đấu phù hợp!`);
-    res.json({ metas });
-  } catch (err) {
-    console.error('[CATALOG ERROR]:', err.message);
-    res.json({ metas: [] });
-  }
-});
+    const videos = [];
+    let seasonLegend = '';
 
-// 4. Endpoint Meta
-app.get(['/meta/*', '/:config/meta/*'], async (req, res) => {
-  try {
-    const fullPath = req.path;
-    const parts = fullPath.split('/');
-    const rawFilename = parts[parts.length - 1];
-    const rawId = rawFilename.replace('.json', '');
-    
-    const targetUrl = Buffer.from(rawId, 'base64').toString('utf-8');
+    if (selectedTeams.length > 0) {
+      // Phân chia trận đấu theo từng Season (mỗi đội là 1 Season)
+      seasonLegend = selectedTeams.map((team, idx) => `• Season ${idx + 1}: ${team}`).join('\n');
 
-    const { data } = await axios.get(targetUrl, { headers: HTTP_HEADERS });
-    const $ = cheerio.load(data);
-    const title = $('h1').first().text().trim() || 'MLB Match Replay';
-    let img = $('.post-thumb img, article img, .entry-content img').first().attr('src');
-    if (img && !img.startsWith('http')) img = `https://mlblive.net${img}`;
+      selectedTeams.forEach((teamName, teamIdx) => {
+        const seasonNum = teamIdx + 1;
+        let epNum = 1;
+        const keywords = TEAM_KEYWORDS[teamName] || [teamName.toLowerCase()];
+
+        articles.forEach(art => {
+          const titleLower = art.title.toLowerCase();
+          const isMatch = keywords.some(kw => titleLower.includes(kw));
+          if (isMatch) {
+            videos.push({
+              id: art.id,
+              title: art.title,
+              season: seasonNum,
+              episode: epNum++,
+              released: art.dateISO,
+              thumbnail: art.img,
+              overview: `📅 Ngày đấu (Giờ VN): ${art.dateVNText}\nĐội: ${teamName}`
+            });
+          }
+        });
+      });
+    } else {
+      // Nếu không chọn đội nào, gom tất cả vào Season 1
+      seasonLegend = '• Season 1: Tất cả các trận mới nhất';
+      let epNum = 1;
+      articles.forEach(art => {
+        videos.push({
+          id: art.id,
+          title: art.title,
+          season: 1,
+          episode: epNum++,
+          released: art.dateISO,
+          thumbnail: art.img,
+          overview: `📅 Ngày đấu (Giờ VN): ${art.dateVNText}`
+        });
+      });
+    }
 
     res.json({
       meta: {
-        id: rawId,
-        type: 'movie',
-        name: title,
-        poster: img || '',
-        background: img || '',
-        description: `Trận đấu MLB Replay từ mlblive.net\nAddon phát triển bởi Nhon Truong`
+        id: 'mlb_replays_hub',
+        type: 'series',
+        name: '⚾ MLB Replays Hub',
+        poster: 'https://images.unsplash.com/photo-1508802913283-77c8e63a151b?w=600&auto=format&fit=crop',
+        background: 'https://images.unsplash.com/photo-1508802913283-77c8e63a151b?w=1200&auto=format&fit=crop',
+        description: `Danh sách các đội bóng tương ứng với từng Season:\n${seasonLegend}`,
+        videos: videos
       }
     });
   } catch (err) {
     console.error('[META ERROR]:', err.message);
-    res.json({ meta: {} });
+    res.json({ meta: { id: 'mlb_replays_hub', type: 'series', name: '⚾ MLB Replays Hub', videos: [] } });
   }
 });
 
-// 5. Dynamic Stream Endpoint
+// 5. Stream Endpoint (Lấy link xem video)
 app.get(['/stream/*', '/:config/stream/*'], async (req, res) => {
   try {
     const fullPath = req.path;
@@ -308,7 +332,6 @@ app.get(['/stream/*', '/:config/stream/*'], async (req, res) => {
       }
     });
 
-    console.log(`[STREAM] Đã tìm thấy ${streams.length} server phát cho bài viết.`);
     res.json({ streams });
   } catch (err) {
     console.error('[STREAM ERROR]:', err.message);
