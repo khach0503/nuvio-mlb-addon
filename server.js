@@ -15,11 +15,9 @@ const app = express();
 app.use(cors());
 app.use(express.static(__dirname));
 
-// Cache lưu bài viết theo URL cào
 let articlesCache = {}; 
-const CACHE_DURATION = 10 * 60 * 1000; // 10 phút
+const CACHE_DURATION = 10 * 60 * 1000;
 
-// Danh sách 30 đội MLB & Map URL Slug tương ứng
 const MLB_TEAMS_MAP = {
   'Arizona Diamondbacks': 'arizona-diamondbacks-full-game-replay',
   'Atlanta Braves': 'atlanta-braves-full-game-replay',
@@ -78,7 +76,7 @@ const HTTP_HEADERS = {
   'Referer': 'https://mlblive.net/'
 };
 
-// Hàm cào bài viết từ một URL cụ thể (Chỉ lọc lấy trận của năm hiện tại)
+// Hàm cào tối ưu dựa theo HTML thực tế
 async function fetchArticlesFromUrl(targetUrl) {
   const now = Date.now();
   if (articlesCache[targetUrl] && (now - articlesCache[targetUrl].lastFetch) < CACHE_DURATION) {
@@ -90,60 +88,66 @@ async function fetchArticlesFromUrl(targetUrl) {
     const { data } = await axios.get(targetUrl, { headers: HTTP_HEADERS, timeout: 8000 });
     const $ = cheerio.load(data);
     const articles = [];
-    const currentYear = dayjs().year(); // Lấy năm hiện tại (2026)
+    const seenHrefs = new Set();
+    const currentYear = dayjs().year(); // 2026
 
-    $('article, .post, .entry, .item, .card, div[class*="post"]').each((_, el) => {
-      const titleEl = $(el).find('h1 a, h2 a, h3 a, .entry-title a, .title a').first();
-      const aTag = titleEl.length ? titleEl : $(el).find('a').first();
-      
-      const href = aTag.attr('href');
-      let title = aTag.attr('title') || aTag.text().trim() || $(el).find('h1, h2, h3, .title').text().trim();
-      title = title.replace(/\s+/g, ' ').trim();
+    // Quét trực tiếp tất cả các thẻ <a> chứa link trận đấu
+    $('a').each((_, el) => {
+      let href = $(el).attr('href');
+      let title = $(el).text().trim() || $(el).attr('title') || '';
 
-      let img = $(el).find('img').attr('data-lazy-src') || 
-                $(el).find('img').attr('data-src') || 
-                $(el).find('img').attr('data-original') || 
-                $(el).find('img').attr('src');
+      if (!href || !title) return;
 
-      if (title && href) {
-        const dateMatch = title.match(/(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}/i);
-        let dateVNText = 'Không rõ ngày';
-        let dateISO = new Date().toISOString();
-        let articleYear = null;
+      // Chỉ lấy link bài viết chi tiết trận đấu
+      if (!href.includes('full-game-replay') || href.endsWith('/full-game-replay')) return;
 
-        if (dateMatch) {
-          const parsedDate = dayjs.tz(dateMatch[0], 'MMMM D, YYYY', 'America/New_York');
-          if (parsedDate.isValid()) {
-            dateVNText = parsedDate.tz('Asia/Ho_Chi_Minh').format('DD/MM/YYYY');
-            dateISO = parsedDate.toISOString();
-            articleYear = parsedDate.year();
-          }
-        } else {
-          // Trường hợp tiêu đề chỉ chứa số năm
-          const yearMatch = title.match(/\b(20\d{2})\b/);
-          if (yearMatch) {
-            articleYear = parseInt(yearMatch[1], 10);
-          }
-        }
-
-        // LỌC: Bỏ qua nếu bài viết thuộc về các năm trước
-        if (articleYear && articleYear !== currentYear) {
-          return; 
-        }
-
-        if (img && !img.startsWith('http')) img = `https://mlblive.net${img}`;
-
-        articles.push({
-          id: 'vid_' + Buffer.from(href).toString('base64'),
-          title,
-          href,
-          img: img || '',
-          dateVNText,
-          dateISO
-        });
+      // Chuẩn hóa URL: Thêm https://mlblive.net nếu là link tương đối
+      if (href.startsWith('/')) {
+        href = `https://mlblive.net${href}`;
       }
+
+      if (seenHrefs.has(href)) return;
+
+      // Trích xuất ngày tháng
+      const dateMatch = title.match(/(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}/i);
+      let dateVNText = 'Không rõ ngày';
+      let dateISO = new Date().toISOString();
+      let articleYear = null;
+
+      if (dateMatch) {
+        const parsedDate = dayjs.tz(dateMatch[0], 'MMMM D, YYYY', 'America/New_York');
+        if (parsedDate.isValid()) {
+          dateVNText = parsedDate.tz('Asia/Ho_Chi_Minh').format('DD/MM/YYYY');
+          dateISO = parsedDate.toISOString();
+          articleYear = parsedDate.year();
+        }
+      } else {
+        const yearMatch = title.match(/\b(20\d{2})\b/);
+        if (yearMatch) articleYear = parseInt(yearMatch[1], 10);
+      }
+
+      // Lọc lấy trận năm hiện tại
+      if (articleYear && articleYear !== currentYear) return;
+
+      // Bắt thumbnail nếu có
+      const parent = $(el).closest('div, li, article');
+      let img = parent.find('img').attr('data-lazy-src') || 
+                parent.find('img').attr('data-src') || 
+                parent.find('img').attr('src') || '';
+      if (img && img.startsWith('/')) img = `https://mlblive.net${img}`;
+
+      seenHrefs.add(href);
+      articles.push({
+        id: 'vid_' + Buffer.from(href).toString('base64'),
+        title,
+        href,
+        img,
+        dateVNText,
+        dateISO
+      });
     });
 
+    console.log(`[SCRAPE SUCCESS] Tìm thấy ${articles.length} trận đấu!`);
     articlesCache[targetUrl] = { data: articles, lastFetch: now };
     return articles;
   } catch (err) {
@@ -152,7 +156,7 @@ async function fetchArticlesFromUrl(targetUrl) {
   }
 }
 
-// 1. Trang Cấu Hình
+// 1. Config Page
 app.get(['/', '/configure', '/:config', '/:config/configure'], (req, res) => {
   const config = parseConfig(req.params.config);
   const selectedTeams = (config && config.teams) ? config.teams : [];
@@ -184,7 +188,7 @@ app.get(['/', '/configure', '/:config', '/:config/configure'], (req, res) => {
     <body>
       <div class="card">
         <h2>⚾ MLB Replays Hub</h2>
-        <p>Chọn các đội bóng m muốn theo dõi (Mỗi đội sẽ có 1 Season riêng):</p>
+        <p>Chọn các đội bóng m muốn theo dõi (Mỗi đội là 1 Season):</p>
         <form id="configForm">
           <div style="max-height: 300px; overflow-y: auto; background: #252525; padding: 10px; border-radius: 5px;">
             ${teamCheckboxes}
@@ -192,7 +196,7 @@ app.get(['/', '/configure', '/:config', '/:config/configure'], (req, res) => {
           <button type="button" onclick="generateLink()">Tạo Link Cài Đặt Nuvio</button>
         </form>
         <div id="result" class="output">
-          <p style="margin: 0 0 5px 0; color: #aaa;">Copy link bên dưới dán vào Nuvio:</p>
+          <p style="margin: 0 0 5px 0; color: #aaa;">Copy link dán vào Nuvio:</p>
           <strong id="manifestUrl" style="color: #00f0ff;"></strong>
         </div>
       </div>
@@ -226,7 +230,7 @@ app.get(['/manifest.json', '/:config/manifest.json'], (req, res) => {
 
   res.json({
     id: 'org.mlblive.gmt7.nhontruong.addon',
-    version: '1.5.1',
+    version: '1.5.2',
     name: `MLB Replays${nameExtra}`,
     description: 'Trung tâm tổng hợp Replay MLB phân loại theo đội bóng',
     behaviorHints: { configurable: true, configurationRequired: false },
@@ -242,7 +246,7 @@ app.get(['/manifest.json', '/:config/manifest.json'], (req, res) => {
   });
 });
 
-// 3. Catalog (Poster Hub)
+// 3. Catalog
 app.get(['/catalog/*', '/:config/catalog/*'], (req, res) => {
   const posterUrl = getHubPosterUrl(req);
   res.json({
@@ -253,13 +257,13 @@ app.get(['/catalog/*', '/:config/catalog/*'], (req, res) => {
         name: '⚾ MLB Replays Hub',
         poster: posterUrl,
         background: posterUrl,
-        description: 'Bấm vào đây để chọn và xem danh sách các trận đấu Replay theo từng đội bóng.'
+        description: 'Bấm vào để chọn và xem danh sách các trận đấu Replay theo từng đội bóng.'
       }
     ]
   });
 });
 
-// 4. Meta (Trận đấu & Season - Chỉ lấy trận năm hiện tại)
+// 4. Meta
 app.get(['/meta/*', '/:config/meta/*'], async (req, res) => {
   try {
     const config = parseConfig(req.params.config);
@@ -381,4 +385,4 @@ app.get(['/stream/*', '/:config/stream/*'], async (req, res) => {
 });
 
 const PORT = process.env.PORT || 7000;
-app.listen(PORT, () => console.log(`MLB Replays Addon v1.5.1 running at http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`MLB Replays Addon v1.5.2 running at http://localhost:${PORT}`));
