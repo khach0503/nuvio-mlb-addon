@@ -96,7 +96,7 @@ function parseConfig(configStr) {
   }
 }
 
-// 2. Dynamic Manifest Endpoint (Đã đổi tên Addon tại đây)
+// 2. Dynamic Manifest Endpoint (Đã đổi types sang 'series' để hiện ở Home Screen)
 app.get(['/manifest.json', '/:config/manifest.json'], (req, res) => {
   const config = parseConfig(req.params.config);
   let nameExtra = '';
@@ -106,15 +106,15 @@ app.get(['/manifest.json', '/:config/manifest.json'], (req, res) => {
 
   res.json({
     id: 'org.mlblive.gmt7.nhontruong.addon',
-    version: '1.1.0',
+    version: '1.2.0',
     name: `MLB Replays from Nhon Truong${nameExtra}`,
     description: 'Replay MLB cập nhật realtime theo giờ Việt Nam (GMT+7) và lọc theo đội bóng chọn lọc',
     behaviorHints: { configurable: true, configurationRequired: false },
     resources: ['catalog', 'stream'],
-    types: ['tv'],
+    types: ['series', 'movie'],
     catalogs: [
       {
-        type: 'tv',
+        type: 'series',
         id: 'mlblive_catalog',
         name: 'MLB Replays'
       }
@@ -122,11 +122,12 @@ app.get(['/manifest.json', '/:config/manifest.json'], (req, res) => {
   });
 });
 
-// 3. Dynamic Catalog Endpoint (Xử lý lọc theo đội & Convert GMT+7)
-app.get(['/catalog/tv/mlblive_catalog.json', '/:config/catalog/tv/mlblive_catalog.json'], async (req, res) => {
+// 3. Dynamic Catalog Endpoint
+app.get(['/catalog/:type/:id.json', '/:config/catalog/:type/:id.json'], async (req, res) => {
   try {
     const config = parseConfig(req.params.config);
     const selectedTeams = (config && config.teams) ? config.teams : [];
+    const itemType = req.params.type || 'series';
 
     const { data } = await axios.get('https://mlblive.net/', {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
@@ -142,13 +143,11 @@ app.get(['/catalog/tv/mlblive_catalog.json', '/:config/catalog/tv/mlblive_catalo
       let img = $(el).find('img').attr('src') || $(el).find('img').attr('data-src');
 
       if (title && href) {
-        // Lọc theo danh sách đội bóng đã chọn
         if (selectedTeams.length > 0) {
           const matchTeam = selectedTeams.some(team => title.toLowerCase().includes(team.toLowerCase()));
           if (!matchTeam) return;
         }
 
-        // Tách ngày và convert GMT+7
         const dateMatch = title.match(/(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}/i);
         let dateVNText = 'Không rõ ngày';
         if (dateMatch) {
@@ -164,7 +163,7 @@ app.get(['/catalog/tv/mlblive_catalog.json', '/:config/catalog/tv/mlblive_catalo
 
         metas.push({
           id: id,
-          type: 'tv',
+          type: itemType,
           name: title,
           poster: img || '',
           description: `📅 Ngày đấu (Giờ VN): ${dateVNText}\nNguồn: mlblive.net | Addon by Nhon Truong`
@@ -180,7 +179,7 @@ app.get(['/catalog/tv/mlblive_catalog.json', '/:config/catalog/tv/mlblive_catalo
 });
 
 // 4. Dynamic Stream Endpoint
-app.get(['/stream/tv/:id.json', '/:config/stream/tv/:id.json'], async (req, res) => {
+app.get(['/stream/:type/:id.json', '/:config/stream/:type/:id.json'], async (req, res) => {
   try {
     const rawId = req.params.id.replace('.json', '');
     const targetUrl = Buffer.from(rawId, 'base64').toString('utf-8');
