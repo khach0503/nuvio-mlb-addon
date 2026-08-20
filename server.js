@@ -67,12 +67,21 @@ async function fetchDodgersArticles() {
       }
 
       const cleanHref = href.replace(/\/$/, '');
-      const urlSlug = cleanHref.split('/').pop();
+      const urlSlug = cleanHref.split('/').pop().toLowerCase();
+      const lowerHref = href.toLowerCase();
 
-      // BỘ LỌC CHỈ LẤY BÀI VIẾT TRẬN ĐẤU
-      if (!href.includes('full-game-replay')) return;
+      // BỘ LỌC CHẶT CHẼ DÀNH RIÊNG CHO DODGERS:
+      // 1. URL PHẢI chứa 'dodgers' (Loại sạch menu 29 đội còn lại, năm archive, các trận đội khác ở Sidebar)
+      if (!lowerHref.includes('dodgers')) return;
+
+      // 2. URL PHẢI chứa 'full-game-replay'
+      if (!lowerHref.includes('full-game-replay')) return;
+
+      // 3. LOẠI BỎ chính trang danh mục Dodgers gốc
       if (urlSlug === 'los-angeles-dodgers-full-game-replay') return;
-      if (href.includes('/category/') || href.includes('/page/') || href.includes('/tag/')) return;
+
+      // 4. LOẠI BỎ các đường dẫn phân trang, category, tag
+      if (lowerHref.includes('/category/') || lowerHref.includes('/page/') || lowerHref.includes('/tag/')) return;
 
       if (seenHrefs.has(href)) return;
 
@@ -86,7 +95,7 @@ async function fetchDodgersArticles() {
       articles.push({ title, href, img });
     });
 
-    console.log(`[SCRAPE SUCCESS] Cào thành công ${articles.length} trận đấu Dodgers:`);
+    console.log(`[SCRAPE SUCCESS] Cào thành công ${articles.length} trận đấu chuẩn Dodgers:`);
     articles.forEach((art, index) => {
       console.log(`   ${index + 1}. [${art.title}] -> ${art.href}`);
     });
@@ -100,7 +109,7 @@ async function fetchDodgersArticles() {
   }
 }
 
-// 0. Trang chủ Landing Page (Fix lỗi Cannot GET /)
+// 0. Landing Page
 app.get(['/', '/configure'], (req, res) => {
   const manifestUrl = `${req.protocol}://${req.get('host')}/manifest.json`;
   const html = `
@@ -146,7 +155,7 @@ app.get(['/', '/configure'], (req, res) => {
 app.get('/manifest.json', (req, res) => {
   res.json({
     id: 'org.dodgersreplays.gmt7.nhontruong.addon',
-    version: '3.1.0',
+    version: '3.2.0',
     name: 'Dodgers Replays',
     description: 'Tổng hợp toàn bộ trận đấu Replay của Los Angeles Dodgers',
     resources: [
@@ -284,4 +293,4 @@ app.get('/stream/*', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 7000;
-app.listen(PORT, () => console.log(`Dodgers Replays Addon v3.1.0 running at http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`Dodgers Replays Addon v3.2.0 running at http://localhost:${PORT}`));
