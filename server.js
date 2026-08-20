@@ -69,14 +69,9 @@ async function fetchDodgersArticles() {
       const cleanHref = href.replace(/\/$/, '');
       const urlSlug = cleanHref.split('/').pop();
 
-      // BỘ LỌC CHỈ LẤY BÀI VIẾT TRẬN ĐẤU:
-      // 1. URL phải chứa 'mlb-full-game-replay' hoặc 'full-game-replay'
+      // BỘ LỌC CHỈ LẤY BÀI VIẾT TRẬN ĐẤU
       if (!href.includes('full-game-replay')) return;
-
-      // 2. LOẠI BỎ chính trang danh mục Dodgers
       if (urlSlug === 'los-angeles-dodgers-full-game-replay') return;
-
-      // 3. LOẠI BỎ phân trang, category, tag
       if (href.includes('/category/') || href.includes('/page/') || href.includes('/tag/')) return;
 
       if (seenHrefs.has(href)) return;
@@ -105,11 +100,53 @@ async function fetchDodgersArticles() {
   }
 }
 
+// 0. Trang chủ Landing Page (Fix lỗi Cannot GET /)
+app.get(['/', '/configure'], (req, res) => {
+  const manifestUrl = `${req.protocol}://${req.get('host')}/manifest.json`;
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Dodgers Replays Addon</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <style>
+        body { font-family: Arial, sans-serif; padding: 20px; background: #121212; color: #fff; max-width: 500px; margin: 40px auto; text-align: center; }
+        .card { background: #1e1e1e; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); border: 1px solid #333; }
+        h2 { color: #00d2ff; margin-top: 0; }
+        .status { display: inline-block; padding: 5px 12px; background: #00e676; color: #000; font-weight: bold; border-radius: 20px; font-size: 0.85em; margin-bottom: 15px; }
+        input { width: 100%; padding: 10px; border-radius: 5px; border: 1px solid #444; background: #2a2a2a; color: #00f0ff; text-align: center; font-size: 0.9em; box-sizing: border-box; margin: 10px 0; }
+        button { background: #00d2ff; color: #000; border: none; padding: 10px 20px; font-weight: bold; border-radius: 5px; cursor: pointer; width: 100%; }
+        button:hover { background: #0099cc; }
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <h2>⚾ Dodgers Replays Addon</h2>
+        <div class="status">● ONLINE</div>
+        <p style="color: #ccc; font-size: 0.95em;">Addon tổng hợp các trận đấu Replay của Los Angeles Dodgers cho Stremio / Nuvio.</p>
+        <p style="margin-top: 20px; text-align: left; color: #aaa; font-size: 0.85em;">Link Manifest cài đặt:</p>
+        <input type="text" id="link" value="${manifestUrl}" readonly>
+        <button onclick="copyLink()">Copy Link Manifest</button>
+      </div>
+      <script>
+        function copyLink() {
+          const input = document.getElementById('link');
+          input.select();
+          document.execCommand('copy');
+          alert('Đã copy link Manifest!');
+        }
+      </script>
+    </body>
+    </html>
+  `;
+  res.send(html);
+});
+
 // 1. Manifest Endpoint
 app.get('/manifest.json', (req, res) => {
   res.json({
     id: 'org.dodgersreplays.gmt7.nhontruong.addon',
-    version: '3.0.0',
+    version: '3.1.0',
     name: 'Dodgers Replays',
     description: 'Tổng hợp toàn bộ trận đấu Replay của Los Angeles Dodgers',
     resources: [
@@ -131,8 +168,6 @@ app.get('/manifest.json', (req, res) => {
 // 2. Catalog Endpoint
 app.get('/catalog/*', (req, res) => {
   const posterUrl = getPosterUrl(req);
-  
-  // Trả về 1 Series duy nhất là "Los Angeles Dodgers Replays"
   res.json({
     metas: [
       {
@@ -146,11 +181,10 @@ app.get('/catalog/*', (req, res) => {
     ]
   });
 
-  // Trigger cào dữ liệu sẵn
   fetchDodgersArticles().catch(() => {});
 });
 
-// 3. Meta Endpoint (Danh sách tập phim / trận đấu)
+// 3. Meta Endpoint
 app.get('/meta/*', async (req, res) => {
   try {
     const posterUrl = getPosterUrl(req);
@@ -164,7 +198,7 @@ app.get('/meta/*', async (req, res) => {
         title: art.title,
         season: 1,
         episode: epNum,
-        released: '2020-01-01T00:00:00.000Z', // Ép Nuvio hiện đầy đủ không bị ẩn
+        released: '2020-01-01T00:00:00.000Z',
         thumbnail: art.img,
         overview: art.title
       });
@@ -189,7 +223,7 @@ app.get('/meta/*', async (req, res) => {
   }
 });
 
-// 4. Stream Endpoint (Lấy link video stream)
+// 4. Stream Endpoint
 app.get('/stream/*', async (req, res) => {
   try {
     const cleanId = extractCleanId(req);
@@ -250,4 +284,4 @@ app.get('/stream/*', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 7000;
-app.listen(PORT, () => console.log(`Dodgers Replays Addon v3.0.0 running at http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`Dodgers Replays Addon v3.1.0 running at http://localhost:${PORT}`));
