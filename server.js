@@ -14,7 +14,7 @@ dayjs.extend(customParseFormat);
 const app = express();
 app.use(cors());
 
-// Middleware tắt Cache trên Client để Nuvio luôn gọi request mới về server
+// Tắt Cache tuyệt đối để Nuvio luôn cập nhật dữ liệu mới
 app.use((req, res, next) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.setHeader('Pragma', 'no-cache');
@@ -25,7 +25,7 @@ app.use((req, res, next) => {
 app.use(express.static(__dirname));
 
 let articlesCache = {}; 
-const CACHE_DURATION = 10 * 60 * 1000; // Cache 10 phút
+const CACHE_DURATION = 10 * 60 * 1000;
 
 const MLB_TEAMS_MAP = {
   'Arizona Diamondbacks': 'arizona-diamondbacks-full-game-replay',
@@ -85,7 +85,6 @@ const HTTP_HEADERS = {
   'Referer': 'https://mlblive.net/'
 };
 
-// Hàm cào bài viết từ 1 URL
 async function fetchArticlesFromUrl(targetUrl) {
   const now = Date.now();
   if (articlesCache[targetUrl] && (now - articlesCache[targetUrl].lastFetch) < CACHE_DURATION) {
@@ -132,7 +131,6 @@ async function fetchArticlesFromUrl(targetUrl) {
 
       seenHrefs.add(href);
       articles.push({
-        rawHash: Buffer.from(href).toString('base64'),
         title,
         href,
         img,
@@ -150,7 +148,6 @@ async function fetchArticlesFromUrl(targetUrl) {
   }
 }
 
-// Hàm kích hoạt cào ngầm sẵn dữ liệu
 function warmupCache(selectedTeams) {
   if (!selectedTeams || selectedTeams.length === 0) {
     fetchArticlesFromUrl('https://mlblive.net/').catch(() => {});
@@ -238,12 +235,13 @@ app.get(['/manifest.json', '/:config/manifest.json'], (req, res) => {
 
   res.json({
     id: 'org.mlblive.gmt7.nhontruong.addon',
-    version: '1.7.0',
+    version: '1.9.0',
     name: `MLB Replays${nameExtra}`,
     description: 'Trung tâm tổng hợp Replay MLB phân loại theo đội bóng',
     behaviorHints: { configurable: true, configurationRequired: false },
     resources: ['catalog', 'meta', 'stream'],
     types: ['series'],
+    idPrefixes: ['mlb_replays_hub'],
     catalogs: [
       {
         type: 'series',
@@ -254,13 +252,13 @@ app.get(['/manifest.json', '/:config/manifest.json'], (req, res) => {
   });
 });
 
-// 3. Catalog (KÍCH HOẠT CÀO NGẦM NGAY KHI NUVIO TẢI MÀN HÌNH CHÍNH)
+// 3. Catalog
 app.get(['/catalog/*', '/:config/catalog/*'], (req, res) => {
   const config = parseConfig(req.params.config);
   const selectedTeams = (config && config.teams) ? config.teams : [];
   const posterUrl = getHubPosterUrl(req);
 
-  console.log(`\n⚡ [CATALOG EVENT] Nuvio vừa tải Catalog -> Kích hoạt cào sẵn dữ liệu các đội ngay!`);
+  console.log(`\n⚡ [CATALOG EVENT] Nuvio tải trang chủ -> Kích hoạt cào ngầm!`);
   warmupCache(selectedTeams);
 
   res.json({
@@ -277,10 +275,10 @@ app.get(['/catalog/*', '/:config/catalog/*'], (req, res) => {
   });
 });
 
-// 4. Meta Endpoint (CÀO SONG SONG SONG SONG TẤT CẢ CÁC ĐỘI)
+// 4. Meta Endpoint (ID CHUẨN ĐÚNG 3 PHẦN: mlb_replays_hub:Season:Episode)
 app.get(['/meta/*', '/:config/meta/*'], async (req, res) => {
   console.log(`\n========================================`);
-  console.log(`[META REQUEST] Nuvio đang lấy danh sách trận đấu!`);
+  console.log(`[META REQUEST] Nuvio gửi yêu cầu lấy danh sách tập!`);
   try {
     const config = parseConfig(req.params.config);
     const selectedTeams = (config && config.teams) ? config.teams : [];
@@ -292,7 +290,6 @@ app.get(['/meta/*', '/:config/meta/*'], async (req, res) => {
     if (selectedTeams.length > 0) {
       seasonLegend = selectedTeams.map((team, idx) => `• Season ${idx + 1}: ${team}`).join('\n');
 
-      // Cào song song bằng Promise.all để lấy dữ liệu siêu nhanh
       const teamPromises = selectedTeams.map(async (teamName, idx) => {
         const teamSlug = MLB_TEAMS_MAP[teamName];
         const teamUrl = `https://mlblive.net/${teamSlug}`;
@@ -307,7 +304,7 @@ app.get(['/meta/*', '/:config/meta/*'], async (req, res) => {
         let epNum = 1;
         articles.forEach(art => {
           videos.push({
-            id: `mlb_replays_hub:${seasonNum}:${epNum}:${art.rawHash}`,
+            id: `mlb_replays_hub:${seasonNum}:${epNum}`, // ID đúng chuẩn Stremio/Nuvio
             title: art.title,
             season: seasonNum,
             episode: epNum++,
@@ -323,7 +320,7 @@ app.get(['/meta/*', '/:config/meta/*'], async (req, res) => {
       let epNum = 1;
       articles.forEach(art => {
         videos.push({
-          id: `mlb_replays_hub:1:${epNum}:${art.rawHash}`,
+          id: `mlb_replays_hub:1:${epNum}`,
           title: art.title,
           season: 1,
           episode: epNum++,
@@ -334,7 +331,7 @@ app.get(['/meta/*', '/:config/meta/*'], async (req, res) => {
       });
     }
 
-    console.log(`[META SUCCESS] Trả về tổng cộng ${videos.length} tập cho Nuvio.`);
+    console.log(`[META SUCCESS] Đã gửi ${videos.length} tập phim chuẩn cấu trúc sang Nuvio!`);
     console.log(`========================================\n`);
 
     res.json({
@@ -354,30 +351,50 @@ app.get(['/meta/*', '/:config/meta/*'], async (req, res) => {
   }
 });
 
-// 5. Stream Endpoint
+// 5. Stream Endpoint (TỰ SUY MÃ NGUỒN TỪ SEASON VÀ EPISODE)
 app.get(['/stream/*', '/:config/stream/*'], async (req, res) => {
   try {
     const fullPath = req.path;
     const parts = fullPath.split('/');
     const rawFilename = parts[parts.length - 1];
-    let rawId = rawFilename.replace('.json', '');
+    const cleanId = rawFilename.replace('.json', '');
 
-    const idSegments = rawId.split(':');
-    const rawHash = idSegments[idSegments.length - 1];
-
-    let targetUrl = '';
-    try {
-      targetUrl = Buffer.from(rawHash, 'base64').toString('utf-8');
-    } catch (e) {
+    const idParts = cleanId.split(':');
+    if (idParts.length < 3) {
       return res.json({ streams: [] });
     }
 
-    if (!targetUrl.startsWith('http')) {
+    const seasonNum = parseInt(idParts[1], 10);
+    const epNum = parseInt(idParts[2], 10);
+
+    const config = parseConfig(req.params.config);
+    const selectedTeams = (config && config.teams) ? config.teams : [];
+
+    let targetUrl = '';
+
+    if (selectedTeams.length > 0) {
+      const teamName = selectedTeams[seasonNum - 1];
+      if (teamName) {
+        const teamSlug = MLB_TEAMS_MAP[teamName];
+        const teamUrl = `https://mlblive.net/${teamSlug}`;
+        const articles = await fetchArticlesFromUrl(teamUrl);
+        if (articles[epNum - 1]) {
+          targetUrl = articles[epNum - 1].href;
+        }
+      }
+    } else {
+      const articles = await fetchArticlesFromUrl('https://mlblive.net/');
+      if (articles[epNum - 1]) {
+        targetUrl = articles[epNum - 1].href;
+      }
+    }
+
+    if (!targetUrl) {
       return res.json({ streams: [] });
     }
 
     console.log(`\n========================================`);
-    console.log(`[STREAM REQUEST] Đang cào link video từ: ${targetUrl}`);
+    console.log(`[STREAM REQUEST] S${seasonNum}E${epNum} -> Đang cào link từ: ${targetUrl}`);
     
     const { data } = await axios.get(targetUrl, { headers: HTTP_HEADERS, timeout: 8000 });
     const $ = cheerio.load(data);
@@ -422,4 +439,4 @@ app.get(['/stream/*', '/:config/stream/*'], async (req, res) => {
 });
 
 const PORT = process.env.PORT || 7000;
-app.listen(PORT, () => console.log(`MLB Replays Addon v1.7.0 running at http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`MLB Replays Addon v1.9.0 running at http://localhost:${PORT}`));
