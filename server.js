@@ -16,7 +16,7 @@ app.use(cors());
 app.use(express.static(__dirname));
 
 let articlesCache = {}; 
-const CACHE_DURATION = 10 * 60 * 1000; // 10 phút
+const CACHE_DURATION = 10 * 60 * 1000;
 
 const MLB_TEAMS_MAP = {
   'Arizona Diamondbacks': 'arizona-diamondbacks-full-game-replay',
@@ -76,7 +76,6 @@ const HTTP_HEADERS = {
   'Referer': 'https://mlblive.net/'
 };
 
-// Hàm cào bài viết từ một URL cụ thể
 async function fetchArticlesFromUrl(targetUrl) {
   const now = Date.now();
   if (articlesCache[targetUrl] && (now - articlesCache[targetUrl].lastFetch) < CACHE_DURATION) {
@@ -84,31 +83,26 @@ async function fetchArticlesFromUrl(targetUrl) {
   }
 
   try {
-    console.log(`[SCRAPE] Đang cào dữ liệu từ: ${targetUrl}`);
+    console.log(`[SCRAPE] Đang cào dữ liệu danh sách từ: ${targetUrl}`);
     const { data } = await axios.get(targetUrl, { headers: HTTP_HEADERS, timeout: 8000 });
     const $ = cheerio.load(data);
     const articles = [];
     const seenHrefs = new Set();
-    const currentYear = dayjs().year(); // Lấy năm hiện tại
+    const currentYear = dayjs().year();
 
-    // Quét trực tiếp các thẻ <a> chứa link bài viết
     $('a').each((_, el) => {
       let href = $(el).attr('href');
       let title = $(el).text().trim() || $(el).attr('title') || '';
 
       if (!href || !title) return;
-
-      // Chỉ lấy link bài viết chi tiết trận đấu
       if (!href.includes('full-game-replay') || href.endsWith('/full-game-replay')) return;
 
-      // Chuẩn hóa link tương đối thành link tuyệt đối
       if (href.startsWith('/')) {
         href = `https://mlblive.net${href}`;
       }
 
       if (seenHrefs.has(href)) return;
 
-      // Trích xuất ngày tháng
       const dateMatch = title.match(/(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}/i);
       let dateVNText = 'Không rõ ngày';
       let dateISO = new Date().toISOString();
@@ -126,10 +120,8 @@ async function fetchArticlesFromUrl(targetUrl) {
         if (yearMatch) articleYear = parseInt(yearMatch[1], 10);
       }
 
-      // Lọc: Bỏ qua nếu không phải trận năm hiện tại
       if (articleYear && articleYear !== currentYear) return;
 
-      // Lấy thumbnail nếu có
       const parent = $(el).closest('div, li, article');
       let img = parent.find('img').attr('data-lazy-src') || 
                 parent.find('img').attr('data-src') || 
@@ -230,7 +222,7 @@ app.get(['/manifest.json', '/:config/manifest.json'], (req, res) => {
 
   res.json({
     id: 'org.mlblive.gmt7.nhontruong.addon',
-    version: '1.5.3',
+    version: '1.5.4',
     name: `MLB Replays${nameExtra}`,
     description: 'Trung tâm tổng hợp Replay MLB phân loại theo đội bóng',
     behaviorHints: { configurable: true, configurationRequired: false },
@@ -331,7 +323,7 @@ app.get(['/meta/*', '/:config/meta/*'], async (req, res) => {
   }
 });
 
-// 5. Stream Endpoint
+// 5. Stream Endpoint (LOG CHI TIẾT LOGIC CÀO OK.RU)
 app.get(['/stream/*', '/:config/stream/*'], async (req, res) => {
   try {
     const fullPath = req.path;
@@ -354,10 +346,13 @@ app.get(['/stream/*', '/:config/stream/*'], async (req, res) => {
       return res.json({ streams: [] });
     }
 
-    console.log(`[STREAM] Đang lấy link video từ: ${targetUrl}`);
+    console.log(`\n========================================`);
+    console.log(`[STREAM REQUEST] Đang cào link video từ: ${targetUrl}`);
+    
     const { data } = await axios.get(targetUrl, { headers: HTTP_HEADERS, timeout: 8000 });
     const $ = cheerio.load(data);
     const streams = [];
+    let hasOkRu = false;
 
     $('iframe').each((index, el) => {
       let src = $(el).attr('src') || $(el).attr('data-src') || $(el).attr('data-lazy-src');
@@ -367,11 +362,16 @@ app.get(['/stream/*', '/:config/stream/*'], async (req, res) => {
           src = 'https:' + src;
         }
 
+        console.log(` ➜ [IFRAME #${index + 1}] Tìm thấy link: ${src}`);
+
         let serverName = `Server #${index + 1}`;
         if (src.includes('ok.ru')) {
+          hasOkRu = true;
           serverName = `⚾ OK.ru Direct #${index + 1}`;
+          console.log(`    ✅ [OK.RU CHECK] Lấy thành công link OK.ru!`);
         } else if (src.includes('mail.ru')) {
           serverName = `⚾ Mail.ru Direct #${index + 1}`;
+          console.log(`    📦 [MAIL.RU CHECK] Lấy thành công link Mail.ru!`);
         }
 
         streams.push({
@@ -387,13 +387,19 @@ app.get(['/stream/*', '/:config/stream/*'], async (req, res) => {
       }
     });
 
-    console.log(`[STREAM SUCCESS] Tìm thấy ${streams.length} luồng stream.`);
+    if (hasOkRu) {
+      console.log(`🎉 [STREAM RESULT] ĐÃ BẮT ĐƯỢC LINK OK.RU THÀNH CÔNG!`);
+    } else {
+      console.log(`⚠️ [STREAM RESULT] Không tìm thấy link OK.ru trong bài viết này (Tìm thấy ${streams.length} iframe khác).`);
+    }
+    console.log(`========================================\n`);
+
     res.json({ streams });
   } catch (err) {
-    console.error('[STREAM ERROR]:', err.message);
+    console.error('❌ [STREAM ERROR]:', err.message);
     res.json({ streams: [] });
   }
 });
 
 const PORT = process.env.PORT || 7000;
-app.listen(PORT, () => console.log(`MLB Replays Addon v1.5.3 running at http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`MLB Replays Addon v1.5.4 running at http://localhost:${PORT}`));
