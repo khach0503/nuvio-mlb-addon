@@ -6,6 +6,7 @@ const cheerio = require('cheerio');
 const app = express();
 app.use(cors());
 
+// Tắt Cache tuyệt đối phía Client/Proxy
 app.use((req, res, next) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
   res.setHeader('Pragma', 'no-cache');
@@ -31,6 +32,7 @@ function extractCleanId(req) {
   }
 }
 
+// Trích xuất ngày từ tiêu đề trận đấu
 function parseReleaseDate(title) {
   try {
     const match = title.match(/(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}/i);
@@ -48,6 +50,45 @@ const HTTP_HEADERS = {
   'Referer': 'https://mlblive.net/'
 };
 
+// HÀM BÓC TÁCH LINK MEDIA TRỰC TIẾP TỪ OK.RU
+async function getOkRuDirectUrl(embedUrl) {
+  try {
+    let targetUrl = embedUrl;
+    if (targetUrl.includes('ok.ru/video/')) {
+      targetUrl = targetUrl.replace('ok.ru/video/', 'ok.ru/videoembed/');
+    }
+
+    const { data } = await axios.get(targetUrl, { headers: HTTP_HEADERS, timeout: 5000 });
+    const $ = cheerio.load(data);
+    
+    const dataOptions = $('div[data-module="OKVideo"]').attr('data-options') || $('div[data-options]').attr('data-options');
+    
+    if (dataOptions) {
+      const options = JSON.parse(dataOptions);
+      const metadataStr = options.flashvars ? options.flashvars.metadata : options.metadata;
+      
+      if (metadataStr) {
+        const metadata = typeof metadataStr === 'string' ? JSON.parse(metadataStr) : metadataStr;
+        
+        // 1. Ưu tiên lấy link HLS (.m3u8)
+        if (metadata.hlsManifestUrl) {
+          return metadata.hlsManifestUrl;
+        }
+        
+        // 2. Ưu tiên lấy link MP4 chất lượng cao nhất
+        if (metadata.videos && metadata.videos.length > 0) {
+          const bestVideo = metadata.videos[metadata.videos.length - 1];
+          return bestVideo.url;
+        }
+      }
+    }
+  } catch (err) {
+    console.error(`⚠️ [PARSER OK.RU FAIL]:`, err.message);
+  }
+  return null;
+}
+
+// CÀO BÀI VIẾT TỪ MBL LIVE
 async function fetchDodgersArticles() {
   try {
     console.log(`\n========================================`);
@@ -143,7 +184,7 @@ app.get(['/', '/configure'], (req, res) => {
 app.get('/manifest.json', (req, res) => {
   res.json({
     id: 'org.dodgersreplays.gmt7.nhontruong.addon',
-    version: '3.7.0',
+    version: '3.8.0',
     name: 'Dodgers Replays',
     description: 'Tổng hợp toàn bộ trận đấu Replay của Los Angeles Dodgers',
     resources: [
@@ -202,7 +243,43 @@ app.get('/meta/*', async (req, res) => {
   }
 });
 
-// 4. Stream Endpoint (Trả về link Embed chuẩn kèm Header)
+// 4. Proxy Endpoint (Gắn HeaderReferer & Chuyển tiếp luồng Stream cho Nuvio)
+app.get('/proxy', async (req, res) => {
+  const videoUrl = req.query.url;
+  if (!videoUrl) return res.status(400).send('Missing URL');
+
+  try {
+    const headers = {
+      'User-Agent': HTTP_HEADERS['User-Agent'],
+      'Referer': 'https://ok.ru/'
+    };
+
+    // Hỗ trợ TUA VIDEO cho Nuvio
+    if (req.headers.range) {
+      headers['Range'] = req.headers.range;
+    }
+
+    const response = await axios({
+      method: 'get',
+      url: videoUrl,
+      headers: headers,
+      responseType: 'stream',
+      timeout: 10000
+    });
+
+    res.status(response.status);
+    ['content-type', 'content-length', 'content-range', 'accept-ranges'].forEach(h => {
+      if (response.headers[h]) res.setHeader(h, response.headers[h]);
+    });
+
+    response.data.pipe(res);
+  } catch (err) {
+    console.error('❌ [PROXY ERROR]:', err.message);
+    res.status(500).send('Proxy Stream Error');
+  }
+});
+
+// 5. Stream Endpoint (Tự giải mã Direct Link & Ghép vào Proxy)
 app.get('/stream/*', async (req, res) => {
   try {
     const cleanId = extractCleanId(req);
@@ -216,35 +293,58 @@ app.get('/stream/*', async (req, res) => {
       return res.json({ streams: [] });
     }
 
-    console.log(`\n[STREAM REQUEST] Tập #${epNum} (${targetArticle.title})`);
+    console.log(`\n========================================`);
+    console.log(`[STREAM REQUEST] Tập #${epNum} (${targetArticle.title})\nBài viết: ${targetArticle.href}`);
 
     const { data } = await axios.get(targetArticle.href, { headers: HTTP_HEADERS, timeout: 8000 });
     const $ = cheerio.load(data);
     const streams = [];
+    const iframeElements = $('iframe').toArray();
 
-    $('iframe').each((index, el) => {
+    for (let index = 0; index < iframeElements.length; index++) {
+      const el = iframeElements[index];
       let src = $(el).attr('src') || $(el).attr('data-src') || $(el).attr('data-lazy-src');
-      if (src) {
-        if (src.startsWith('//')) src = 'https:' + src;
-        if (src.includes('ok.ru/video/')) src = src.replace('ok.ru/video/', 'ok.ru/videoembed/');
+      
+      if (!src) continue;
+      if (src.startsWith('//')) src = 'https:' + src;
 
-        let serverName = src.includes('ok.ru') ? `⚾ OK.ru Direct #${index + 1}` : `Server #${index + 1}`;
+      let streamUrl = src;
+      let serverName = `Server #${index + 1}`;
 
-        streams.push({
-          title: serverName,
-          url: src,
-          behaviorHints: {
-            notSupported: false,
-            requestHeaders: {
-              'User-Agent': HTTP_HEADERS['User-Agent'],
-              'Referer': 'https://mlblive.net/'
-            }
+      if (src.includes('ok.ru')) {
+        serverName = `⚡ OK.ru Fast Stream #${index + 1}`;
+        const directMediaUrl = await getOkRuDirectUrl(src);
+        
+        if (directMediaUrl) {
+          // Tạo Proxy URL dạng: https://[domain-render]/proxy?url=...
+          const host = req.get('host');
+          const protocol = req.protocol;
+          streamUrl = `${protocol}://${host}/proxy?url=${encodeURIComponent(directMediaUrl)}`;
+          console.log(` ➔ [PARSED MEDIA URL]: ${directMediaUrl}`);
+          console.log(` ➔ [GENERATED PROXY LINK]: ${streamUrl}`);
+        } else {
+          console.log(` ⚠️ [PARSE FAIL] Dùng link Embed dự phòng: ${src}`);
+          if (src.includes('ok.ru/video/')) {
+            streamUrl = src.replace('ok.ru/video/', 'ok.ru/videoembed/');
           }
-        });
-
-        console.log(` ➔ [STREAM EMBED #${index + 1}] (${serverName}): ${src}`);
+        }
       }
-    });
+
+      streams.push({
+        title: serverName,
+        url: streamUrl,
+        behaviorHints: {
+          notSupported: false,
+          requestHeaders: {
+            'User-Agent': HTTP_HEADERS['User-Agent'],
+            'Referer': 'https://mlblive.net/'
+          }
+        }
+      });
+    }
+
+    console.log(`[STREAM SUCCESS] Trả về ${streams.length} luồng stream.`);
+    console.log(`========================================\n`);
 
     res.json({ streams });
   } catch (err) {
@@ -254,4 +354,4 @@ app.get('/stream/*', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 7000;
-app.listen(PORT, () => console.log(`Dodgers Replays Addon v3.7.0 running at http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`Dodgers Replays Addon v3.8.0 running at http://localhost:${PORT}`));
