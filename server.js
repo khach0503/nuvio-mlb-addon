@@ -18,6 +18,9 @@ app.use(express.static(__dirname));
 
 const DODGERS_URL = 'https://mlblive.net/los-angeles-dodgers-full-game-replay';
 
+// 🔴 CLOUDFLARE WORKER PROXY CỦA M:
+const CF_WORKER_URL = 'https://curly-credit-e5f0.ntp-ntp2.workers.dev'; 
+
 function getPosterUrl(req) {
   return `${req.protocol}://${req.get('host')}/poster.jpg`;
 }
@@ -50,7 +53,7 @@ const HTTP_HEADERS = {
   'Referer': 'https://mlblive.net/'
 };
 
-// HÀM BÓC TÁCH LINK MEDIA TRỰC TIẾP TỪ OK.RU
+// HÀM BÓC TÁCH ÉP ƯU TIÊN LẤY LINK MP4 TRỰC TIẾP TỪ OK.RU
 async function getOkRuDirectUrl(embedUrl) {
   try {
     let targetUrl = embedUrl;
@@ -70,15 +73,21 @@ async function getOkRuDirectUrl(embedUrl) {
       if (metadataStr) {
         const metadata = typeof metadataStr === 'string' ? JSON.parse(metadataStr) : metadataStr;
         
-        // 1. Ưu tiên lấy link HLS (.m3u8)
-        if (metadata.hlsManifestUrl) {
-          return metadata.hlsManifestUrl;
+        // 1. ÉP LẤY LINK MP4 (Ưu tiên MP4 chất lượng cao nhất: 1080p/720p)
+        if (metadata.videos && metadata.videos.length > 0) {
+          const mp4Videos = metadata.videos.filter(v => v.url && !v.url.includes('.m3u8'));
+          
+          if (mp4Videos.length > 0) {
+            const bestMp4 = mp4Videos[mp4Videos.length - 1];
+            console.log(` ⚡ [PARSER OK.RU SUCCESS] Lấy được link MP4 (${bestMp4.name || 'HD'}): ${bestMp4.url}`);
+            return bestMp4.url;
+          }
         }
         
-        // 2. Ưu tiên lấy link MP4 chất lượng cao nhất
-        if (metadata.videos && metadata.videos.length > 0) {
-          const bestVideo = metadata.videos[metadata.videos.length - 1];
-          return bestVideo.url;
+        // 2. DỰ PHÒNG: Nếu OK.ru hoàn toàn không có MP4 mới lấy .m3u8
+        if (metadata.hlsManifestUrl) {
+          console.log(` ⚠️ [PARSER OK.RU WARN] Không tìm thấy MP4, dùng tạm HLS: ${metadata.hlsManifestUrl}`);
+          return metadata.hlsManifestUrl;
         }
       }
     }
@@ -88,7 +97,7 @@ async function getOkRuDirectUrl(embedUrl) {
   return null;
 }
 
-// CÀO BÀI VIẾT TỪ MBL LIVE
+// CÀO BÀI VIẾT TỪ MLB LIVE
 async function fetchDodgersArticles() {
   try {
     console.log(`\n========================================`);
@@ -160,7 +169,7 @@ app.get(['/', '/configure'], (req, res) => {
     <body>
       <div class="card">
         <h2>⚾ Dodgers Replays Addon</h2>
-        <div class="status">● ONLINE</div>
+        <div class="status">● ONLINE (v3.9.0 - CF Worker)</div>
         <p style="color: #ccc; font-size: 0.95em;">Addon tổng hợp các trận đấu Replay của Los Angeles Dodgers cho Stremio / Nuvio.</p>
         <p style="margin-top: 20px; text-align: left; color: #aaa; font-size: 0.85em;">Link Manifest cài đặt:</p>
         <input type="text" id="link" value="${manifestUrl}" readonly>
@@ -184,7 +193,7 @@ app.get(['/', '/configure'], (req, res) => {
 app.get('/manifest.json', (req, res) => {
   res.json({
     id: 'org.dodgersreplays.gmt7.nhontruong.addon',
-    version: '3.8.0',
+    version: '3.9.0',
     name: 'Dodgers Replays',
     description: 'Tổng hợp toàn bộ trận đấu Replay của Los Angeles Dodgers',
     resources: [
@@ -243,7 +252,7 @@ app.get('/meta/*', async (req, res) => {
   }
 });
 
-// 4. Proxy Endpoint (Gắn HeaderReferer & Chuyển tiếp luồng Stream cho Nuvio)
+// 4. Render Proxy Endpoint (Dự phòng)
 app.get('/proxy', async (req, res) => {
   const videoUrl = req.query.url;
   if (!videoUrl) return res.status(400).send('Missing URL');
@@ -254,7 +263,6 @@ app.get('/proxy', async (req, res) => {
       'Referer': 'https://ok.ru/'
     };
 
-    // Hỗ trợ TUA VIDEO cho Nuvio
     if (req.headers.range) {
       headers['Range'] = req.headers.range;
     }
@@ -274,12 +282,12 @@ app.get('/proxy', async (req, res) => {
 
     response.data.pipe(res);
   } catch (err) {
-    console.error('❌ [PROXY ERROR]:', err.message);
+    console.error('❌ [RENDER PROXY ERROR]:', err.message);
     res.status(500).send('Proxy Stream Error');
   }
 });
 
-// 5. Stream Endpoint (Tự giải mã Direct Link & Ghép vào Proxy)
+// 5. Stream Endpoint
 app.get('/stream/*', async (req, res) => {
   try {
     const cleanId = extractCleanId(req);
@@ -312,16 +320,20 @@ app.get('/stream/*', async (req, res) => {
       let serverName = `Server #${index + 1}`;
 
       if (src.includes('ok.ru')) {
-        serverName = `⚡ OK.ru Fast Stream #${index + 1}`;
+        serverName = `⚡ OK.ru Fast MP4 Direct #${index + 1}`;
         const directMediaUrl = await getOkRuDirectUrl(src);
         
         if (directMediaUrl) {
-          // Tạo Proxy URL dạng: https://[domain-render]/proxy?url=...
-          // CODE MỚI (Dùng Cloudflare Worker Proxy)
-          const CF_WORKER = 'https://curly-credit-e5f0.ntp-ntp2.workers.dev'; // Thay link Worker của m vào đây
-          streamUrl = `${CF_WORKER}?url=${encodeURIComponent(directMediaUrl)}`;
-          console.log(` ➔ [PARSED MEDIA URL]: ${directMediaUrl}`);
-          console.log(` ➔ [GENERATED PROXY LINK]: ${streamUrl}`);
+          if (CF_WORKER_URL && CF_WORKER_URL.trim() !== '') {
+            const cleanCfWorker = CF_WORKER_URL.replace(/\/$/, '');
+            streamUrl = `${cleanCfWorker}?url=${encodeURIComponent(directMediaUrl)}`;
+            console.log(` ➔ [USING CLOUDFLARE PROXY]: ${streamUrl}`);
+          } else {
+            const host = req.get('host');
+            const protocol = req.protocol;
+            streamUrl = `${protocol}://${host}/proxy?url=${encodeURIComponent(directMediaUrl)}`;
+            console.log(` ➔ [USING RENDER PROXY]: ${streamUrl}`);
+          }
         } else {
           console.log(` ⚠️ [PARSE FAIL] Dùng link Embed dự phòng: ${src}`);
           if (src.includes('ok.ru/video/')) {
@@ -354,4 +366,4 @@ app.get('/stream/*', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 7000;
-app.listen(PORT, () => console.log(`Dodgers Replays Addon v3.8.0 running at http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`Dodgers Replays Addon v3.9.0 running at http://localhost:${PORT}`));
