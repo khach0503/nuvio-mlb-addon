@@ -26,7 +26,40 @@ const MLB_TEAMS = [
   'Toronto Blue Jays', 'Washington Nationals'
 ];
 
-// Helper phân tích cấu hình từ URL
+// Từ khóa tìm kiếm thông minh cho từng đội bóng (tránh lỗi viết tắt trên mlblive.net)
+const TEAM_KEYWORDS = {
+  'Arizona Diamondbacks': ['diamondbacks', 'd-backs', 'arizona'],
+  'Atlanta Braves': ['braves', 'atlanta'],
+  'Baltimore Orioles': ['orioles', 'baltimore'],
+  'Boston Red Sox': ['red sox', 'boston'],
+  'Chicago Cubs': ['cubs'],
+  'Chicago White Sox': ['white sox'],
+  'Cincinnati Reds': ['reds', 'cincinnati'],
+  'Cleveland Guardians': ['guardians', 'cleveland'],
+  'Colorado Rockies': ['rockies', 'colorado'],
+  'Detroit Tigers': ['tigers', 'detroit'],
+  'Houston Astros': ['astros', 'houston'],
+  'Kansas City Royals': ['royals', 'kansas'],
+  'Los Angeles Angels': ['angels'],
+  'Los Angeles Dodgers': ['dodgers'],
+  'Miami Marlins': ['marlins', 'miami'],
+  'Milwaukee Brewers': ['brewers', 'milwaukee'],
+  'Minnesota Twins': ['twins', 'minnesota'],
+  'New York Mets': ['mets'],
+  'New York Yankees': ['yankees'],
+  'Oakland Athletics': ['athletics', 'oakland', "a's"],
+  'Philadelphia Phillies': ['phillies', 'philadelphia'],
+  'Pittsburgh Pirates': ['pirates', 'pittsburgh'],
+  'San Diego Padres': ['padres', 'san diego'],
+  'San Francisco Giants': ['giants', 'san francisco'],
+  'Seattle Mariners': ['mariners', 'seattle'],
+  'St. Louis Cardinals': ['cardinals', 'st. louis', 'st louis'],
+  'Tampa Bay Rays': ['rays', 'tampa'],
+  'Texas Rangers': ['rangers', 'texas'],
+  'Toronto Blue Jays': ['blue jays', 'toronto'],
+  'Washington Nationals': ['nationals', 'washington']
+};
+
 function parseConfig(configStr) {
   if (!configStr) return null;
   try {
@@ -40,7 +73,7 @@ function parseConfig(configStr) {
   }
 }
 
-// 1. Giao diện Cấu hình (Sửa lỗi 404 khi bấm hình bánh răng trong Nuvio)
+// 1. Giao diện Cấu hình
 app.get(['/', '/configure', '/:config', '/:config/configure'], (req, res) => {
   const config = parseConfig(req.params.config);
   const selectedTeams = (config && config.teams) ? config.teams : [];
@@ -72,7 +105,7 @@ app.get(['/', '/configure', '/:config', '/:config/configure'], (req, res) => {
     <body>
       <div class="card">
         <h2>⚾ MLB Replays from Nhon Truong</h2>
-        <p>Tích chọn các đội bóng bạn muốn xem (Nếu không chọn đội nào, addon sẽ hiển thị tất cả):</p>
+        <p>Tích chọn các đội bóng bạn muốn xem (Nếu không chọn đội nào, addon sẽ hiển thị tất cả các trận):</p>
         <form id="configForm">
           <div style="max-height: 300px; overflow-y: auto; background: #252525; padding: 10px; border-radius: 5px;">
             ${teamCheckboxes}
@@ -106,7 +139,7 @@ app.get(['/', '/configure', '/:config', '/:config/configure'], (req, res) => {
   res.send(html);
 });
 
-// 2. Dynamic Manifest Endpoint
+// 2. Manifest Endpoint
 app.get(['/manifest.json', '/:config/manifest.json'], (req, res) => {
   const config = parseConfig(req.params.config);
   let nameExtra = '';
@@ -116,12 +149,12 @@ app.get(['/manifest.json', '/:config/manifest.json'], (req, res) => {
 
   res.json({
     id: 'org.mlblive.gmt7.nhontruong.addon',
-    version: '1.3.0',
+    version: '1.3.1',
     name: `MLB Replays from Nhon Truong${nameExtra}`,
     description: 'Replay MLB cập nhật realtime theo giờ Việt Nam (GMT+7) và lọc theo đội bóng chọn lọc',
     behaviorHints: { configurable: true, configurationRequired: false },
     resources: ['catalog', 'meta', 'stream'],
-    types: ['movie', 'series', 'tv'],
+    types: ['movie'],
     catalogs: [
       {
         type: 'movie',
@@ -132,37 +165,58 @@ app.get(['/manifest.json', '/:config/manifest.json'], (req, res) => {
   });
 });
 
-// 3. Dynamic Catalog Endpoint (Để type: 'movie' để đẩy ra Home Board)
-app.get(['/catalog/:type/:id.json', '/:config/catalog/:type/:id.json'], async (req, res) => {
+// Helper HTTP Headers chống bị mlblive.net chặn
+const HTTP_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Referer': 'https://mlblive.net/'
+};
+
+// 3. Dynamic Catalog Endpoint (Hứng tất cả các dạng request từ Nuvio)
+app.get(['/catalog/*', '/:config/catalog/*'], async (req, res) => {
   try {
     const config = parseConfig(req.params.config);
     const selectedTeams = (config && config.teams) ? config.teams : [];
-    const itemType = req.params.type || 'movie';
 
-    const { data } = await axios.get('https://mlblive.net/', {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-    });
+    console.log(`[CATALOG] Đang tải bài viết từ mlblive.net... (Đội đã chọn: ${selectedTeams.length})`);
 
+    const { data } = await axios.get('https://mlblive.net/', { headers: HTTP_HEADERS });
     const $ = cheerio.load(data);
     const metas = [];
 
-    $('article, .post, .item').each((_, el) => {
-      const aTag = $(el).find('a').first();
-      const title = aTag.attr('title') || $(el).find('.title, h2').text().trim();
+    $('article, .post, .entry, .item, .card, div[class*="post"]').each((_, el) => {
+      const titleEl = $(el).find('h1 a, h2 a, h3 a, .entry-title a, .title a').first();
+      const aTag = titleEl.length ? titleEl : $(el).find('a').first();
+      
       const href = aTag.attr('href');
-      let img = $(el).find('img').attr('src') || $(el).find('img').attr('data-src');
+      let title = aTag.attr('title') || aTag.text().trim() || $(el).find('h1, h2, h3, .title').text().trim();
+      title = title.replace(/\s+/g, ' ').trim();
+
+      let img = $(el).find('img').attr('data-lazy-src') || 
+                $(el).find('img').attr('data-src') || 
+                $(el).find('img').attr('data-original') || 
+                $(el).find('img').attr('src');
 
       if (title && href) {
+        // Kiểm tra lọc đội bóng theo từ khóa mở rộng
         if (selectedTeams.length > 0) {
-          const matchTeam = selectedTeams.some(team => title.toLowerCase().includes(team.toLowerCase()));
-          if (!matchTeam) return;
+          const titleLower = title.toLowerCase();
+          const matchFound = selectedTeams.some(teamName => {
+            const keywords = TEAM_KEYWORDS[teamName] || [teamName.toLowerCase()];
+            return keywords.some(kw => titleLower.includes(kw));
+          });
+
+          if (!matchFound) return;
         }
 
         const dateMatch = title.match(/(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}/i);
         let dateVNText = 'Không rõ ngày';
         if (dateMatch) {
           const parsedDate = dayjs.tz(dateMatch[0], 'MMMM D, YYYY', 'America/New_York');
-          dateVNText = parsedDate.tz('Asia/Ho_Chi_Minh').format('DD/MM/YYYY');
+          if (parsedDate.isValid()) {
+            dateVNText = parsedDate.tz('Asia/Ho_Chi_Minh').format('DD/MM/YYYY');
+          }
         }
 
         if (img && !img.startsWith('http')) {
@@ -173,7 +227,7 @@ app.get(['/catalog/:type/:id.json', '/:config/catalog/:type/:id.json'], async (r
 
         metas.push({
           id: id,
-          type: itemType,
+          type: 'movie',
           name: title,
           poster: img || '',
           description: `📅 Ngày đấu (Giờ VN): ${dateVNText}\nNguồn: mlblive.net | Addon by Nhon Truong`
@@ -181,33 +235,34 @@ app.get(['/catalog/:type/:id.json', '/:config/catalog/:type/:id.json'], async (r
       }
     });
 
+    console.log(`[CATALOG] Tìm thấy ${metas.length} trận đấu phù hợp!`);
     res.json({ metas });
   } catch (err) {
-    console.error('Lỗi Catalog:', err.message);
+    console.error('[CATALOG ERROR]:', err.message);
     res.json({ metas: [] });
   }
 });
 
-// 4. Endpoint Meta (Bổ sung để Nuvio hiển thị trang chi tiết video mượt mà)
-app.get(['/meta/:type/:id.json', '/:config/meta/:type/:id.json'], async (req, res) => {
+// 4. Endpoint Meta
+app.get(['/meta/*', '/:config/meta/*'], async (req, res) => {
   try {
-    const rawId = req.params.id.replace('.json', '');
+    const fullPath = req.path;
+    const parts = fullPath.split('/');
+    const rawFilename = parts[parts.length - 1];
+    const rawId = rawFilename.replace('.json', '');
+    
     const targetUrl = Buffer.from(rawId, 'base64').toString('utf-8');
-    const itemType = req.params.type || 'movie';
 
-    const { data } = await axios.get(targetUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-    });
-
+    const { data } = await axios.get(targetUrl, { headers: HTTP_HEADERS });
     const $ = cheerio.load(data);
-    const title = $('h1').text().trim() || 'MLB Match Replay';
-    let img = $('.post-thumb img, article img').first().attr('src');
+    const title = $('h1').first().text().trim() || 'MLB Match Replay';
+    let img = $('.post-thumb img, article img, .entry-content img').first().attr('src');
     if (img && !img.startsWith('http')) img = `https://mlblive.net${img}`;
 
     res.json({
       meta: {
         id: rawId,
-        type: itemType,
+        type: 'movie',
         name: title,
         poster: img || '',
         background: img || '',
@@ -215,29 +270,31 @@ app.get(['/meta/:type/:id.json', '/:config/meta/:type/:id.json'], async (req, re
       }
     });
   } catch (err) {
+    console.error('[META ERROR]:', err.message);
     res.json({ meta: {} });
   }
 });
 
 // 5. Dynamic Stream Endpoint
-app.get(['/stream/:type/:id.json', '/:config/stream/:type/:id.json'], async (req, res) => {
+app.get(['/stream/*', '/:config/stream/*'], async (req, res) => {
   try {
-    const rawId = req.params.id.replace('.json', '');
+    const fullPath = req.path;
+    const parts = fullPath.split('/');
+    const rawFilename = parts[parts.length - 1];
+    const rawId = rawFilename.replace('.json', '');
+
     const targetUrl = Buffer.from(rawId, 'base64').toString('utf-8');
 
-    const { data } = await axios.get(targetUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-    });
-
+    const { data } = await axios.get(targetUrl, { headers: HTTP_HEADERS });
     const $ = cheerio.load(data);
     const streams = [];
 
     $('iframe').each((index, el) => {
-      let src = $(el).attr('src');
+      let src = $(el).attr('src') || $(el).attr('data-src');
       if (src) {
         if (src.startsWith('//')) src = 'https:' + src;
 
-        let serverName = `Server ${index + 1}`;
+        let serverName = `Server #${index + 1}`;
         if (src.includes('mail.ru')) serverName = `Server Mail.Ru #${index + 1}`;
         if (src.includes('ok.ru')) serverName = `Server OK.Ru #${index + 1}`;
 
@@ -251,9 +308,10 @@ app.get(['/stream/:type/:id.json', '/:config/stream/:type/:id.json'], async (req
       }
     });
 
+    console.log(`[STREAM] Đã tìm thấy ${streams.length} server phát cho bài viết.`);
     res.json({ streams });
   } catch (err) {
-    console.error('Lỗi Stream:', err.message);
+    console.error('[STREAM ERROR]:', err.message);
     res.json({ streams: [] });
   }
 });
