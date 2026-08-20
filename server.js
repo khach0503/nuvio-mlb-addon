@@ -6,7 +6,6 @@ const cheerio = require('cheerio');
 const app = express();
 app.use(cors());
 
-// Tắt Cache tuyệt đối trên Client
 app.use((req, res, next) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.setHeader('Pragma', 'no-cache');
@@ -53,6 +52,7 @@ const MLB_TEAMS_MAP = {
 };
 
 const MLB_TEAMS = Object.keys(MLB_TEAMS_MAP);
+const ALL_TEAM_SLUGS = Object.values(MLB_TEAMS_MAP);
 
 function parseConfig(configStr) {
   if (!configStr) return null;
@@ -94,37 +94,48 @@ async function fetchArticlesFromUrl(targetUrl) {
   }
 
   try {
-    console.log(`[SCRAPE] Đang cào dữ liệu từ: ${targetUrl}`);
+    console.log(`\n========================================`);
+    console.log(`[SCRAPE START] Đang cào dữ liệu từ: ${targetUrl}`);
     const { data } = await axios.get(targetUrl, { headers: HTTP_HEADERS, timeout: 8000 });
     const $ = cheerio.load(data);
     const articles = [];
     const seenHrefs = new Set();
 
-    $('a').each((_, el) => {
-      let href = $(el).attr('href');
-      let rawTitle = $(el).text() || $(el).attr('title') || '';
+    $('article, .post, .type-post').each((_, post) => {
+      const titleEl = $(post).find('h2 a, h1 a, .entry-title a').first();
+      let href = titleEl.attr('href');
+      let rawTitle = titleEl.text() || titleEl.attr('title') || '';
       let title = rawTitle.replace(/\s+/g, ' ').trim();
 
       if (!href || !title) return;
-      if (!href.includes('full-game-replay') || href.endsWith('/full-game-replay')) return;
 
       if (href.startsWith('/')) {
         href = `https://mlblive.net${href}`;
       }
 
+      const cleanHref = href.replace(/\/$/, '');
+      const urlSlug = cleanHref.split('/').pop();
+
+      if (ALL_TEAM_SLUGS.includes(urlSlug)) return;
+      if (urlSlug.includes('mlb-full-game-replays') || href.includes('/category/') || href.includes('/page/')) return;
+
       if (seenHrefs.has(href)) return;
 
-      const parent = $(el).closest('div, li, article');
-      let img = parent.find('img').attr('data-lazy-src') || 
-                parent.find('img').attr('data-src') || 
-                parent.find('img').attr('src') || '';
+      let img = $(post).find('img').attr('data-lazy-src') || 
+                $(post).find('img').attr('data-src') || 
+                $(post).find('img').attr('src') || '';
       if (img && img.startsWith('/')) img = `https://mlblive.net${img}`;
 
       seenHrefs.add(href);
       articles.push({ title, href, img });
     });
 
-    console.log(`[SCRAPE SUCCESS] ${targetUrl} -> Tìm thấy ${articles.length} bài viết.`);
+    console.log(`[SCRAPE SUCCESS] ${targetUrl} -> Tìm thấy ${articles.length} bài viết:`);
+    articles.forEach((art, index) => {
+      console.log(`   ${index + 1}. [${art.title}] -> ${art.href}`);
+    });
+    console.log(`========================================\n`);
+
     articlesCache[targetUrl] = { data: articles, lastFetch: now };
     return articles;
   } catch (err) {
@@ -197,7 +208,7 @@ app.get(['/', '/configure', '/:config', '/:config/configure'], (req, res) => {
   res.send(html);
 });
 
-// 2. Manifest (Cấu trúc chuẩn Stremio SDK)
+// 2. Manifest
 app.get(['/manifest.json', '/:config/manifest.json'], (req, res) => {
   const config = parseConfig(req.params.config);
   let nameExtra = '';
@@ -207,7 +218,7 @@ app.get(['/manifest.json', '/:config/manifest.json'], (req, res) => {
 
   res.json({
     id: 'org.mlblive.gmt7.nhontruong.addon',
-    version: '2.3.0',
+    version: '2.6.0',
     name: `MLB Replays${nameExtra}`,
     description: 'Tổng hợp trận đấu MLB Replay phân loại theo đội bóng',
     behaviorHints: { configurable: true, configurationRequired: false },
@@ -264,14 +275,11 @@ app.get(['/catalog/*', '/:config/catalog/*'], (req, res) => {
   res.json({ metas });
 });
 
-// 4. Meta Endpoint (Đã Fix ngày chiếu 'released' cố định)
+// 4. Meta Endpoint
 app.get(['/meta/*', '/:config/meta/*'], async (req, res) => {
   try {
     const cleanId = extractCleanId(req);
     const posterUrl = getPosterUrl(req);
-
-    console.log(`\n========================================`);
-    console.log(`[META REQUEST] Nuvio chọn Poster ID: ${cleanId}`);
 
     const slug = cleanId.replace('mlb_team:', '');
     let targetUrl = 'https://mlblive.net/';
@@ -293,14 +301,11 @@ app.get(['/meta/*', '/:config/meta/*'], async (req, res) => {
         title: art.title,
         season: 1,
         episode: epNum++,
-        released: '2020-01-01T00:00:00.000Z', // Bắt buộc set ngày cũ để Nuvio không giấu tập
+        released: '2020-01-01T00:00:00.000Z',
         thumbnail: art.img,
         overview: `Đội: ${teamTitle}`
       });
     });
-
-    console.log(`[META SUCCESS] Trả về ${videos.length} tập phim cho Nuvio!`);
-    console.log(`========================================\n`);
 
     res.json({
       meta: {
@@ -341,7 +346,7 @@ app.get(['/stream/*', '/:config/stream/*'], async (req, res) => {
     }
 
     console.log(`\n========================================`);
-    console.log(`[STREAM REQUEST] Đang lấy video cho tập #${epNum} từ: ${targetArticle.href}`);
+    console.log(`[STREAM REQUEST] Lấy stream tập #${epNum} (${targetArticle.title}) từ: ${targetArticle.href}`);
 
     const { data } = await axios.get(targetArticle.href, { headers: HTTP_HEADERS, timeout: 8000 });
     const $ = cheerio.load(data);
@@ -386,4 +391,4 @@ app.get(['/stream/*', '/:config/stream/*'], async (req, res) => {
 });
 
 const PORT = process.env.PORT || 7000;
-app.listen(PORT, () => console.log(`MLB Replays Addon v2.3.0 running at http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`MLB Replays Addon v2.6.0 running at http://localhost:${PORT}`));
