@@ -317,9 +317,9 @@ app.get('/stream/*', async (req, res) => {
         
         if (directMediaUrl) {
           // Tạo Proxy URL dạng: https://[domain-render]/proxy?url=...
-          const host = req.get('host');
-          const protocol = req.protocol;
-          streamUrl = `${protocol}://${host}/proxy?url=${encodeURIComponent(directMediaUrl)}`;
+          // CODE MỚI (Dùng Cloudflare Worker Proxy)
+          const CF_WORKER = 'https://curly-credit-e5f0.ntp-ntp2.workers.dev'; // Thay link Worker của m vào đây
+          streamUrl = `${CF_WORKER}?url=${encodeURIComponent(directMediaUrl)}`;
           console.log(` ➔ [PARSED MEDIA URL]: ${directMediaUrl}`);
           console.log(` ➔ [GENERATED PROXY LINK]: ${streamUrl}`);
         } else {
