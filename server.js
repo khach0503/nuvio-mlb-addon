@@ -14,7 +14,7 @@ dayjs.extend(customParseFormat);
 const app = express();
 app.use(cors());
 
-// Tắt Cache trên Client tuyệt đối
+// Tắt Cache trên Client
 app.use((req, res, next) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.setHeader('Pragma', 'no-cache');
@@ -77,6 +77,17 @@ function parseConfig(configStr) {
 
 function getPosterUrl(req) {
   return `${req.protocol}://${req.get('host')}/poster.jpg`;
+}
+
+// Giải mã ID bị encode bởi Nuvio (%3A -> :)
+function extractCleanId(req) {
+  const rawPath = req.path;
+  const filename = rawPath.split('/').pop().replace('.json', '');
+  try {
+    return decodeURIComponent(filename);
+  } catch (e) {
+    return filename;
+  }
 }
 
 const HTTP_HEADERS = {
@@ -222,7 +233,7 @@ app.get(['/manifest.json', '/:config/manifest.json'], (req, res) => {
 
   res.json({
     id: 'org.mlblive.gmt7.nhontruong.addon',
-    version: '2.0.0',
+    version: '2.1.0',
     name: `MLB Replays${nameExtra}`,
     description: 'Tổng hợp trận đấu MLB Replay phân loại theo đội bóng',
     behaviorHints: { configurable: true, configurationRequired: false },
@@ -239,8 +250,8 @@ app.get(['/manifest.json', '/:config/manifest.json'], (req, res) => {
   });
 });
 
-// 3. Catalog Endpoint (Mỗi đội là 1 Poster)
-app.get(['/catalog/:type/:id.json', '/:config/catalog/:type/:id.json', '/catalog/*', '/:config/catalog/*'], (req, res) => {
+// 3. Catalog Endpoint
+app.get(['/catalog/*', '/:config/catalog/*'], (req, res) => {
   const config = parseConfig(req.params.config);
   const selectedTeams = (config && config.teams) ? config.teams : [];
   const posterUrl = getPosterUrl(req);
@@ -258,7 +269,6 @@ app.get(['/catalog/:type/:id.json', '/:config/catalog/:type/:id.json', '/catalog
         background: posterUrl,
         description: `Danh sách các trận Replay của ${teamName}`
       });
-      // Cào ngầm dữ liệu ngay khi hiện Catalog
       fetchArticlesFromUrl(`https://mlblive.net/${slug}`).catch(() => {});
     });
   } else {
@@ -273,16 +283,14 @@ app.get(['/catalog/:type/:id.json', '/:config/catalog/:type/:id.json', '/catalog
     fetchArticlesFromUrl('https://mlblive.net/').catch(() => {});
   }
 
-  console.log(`\n⚡ [CATALOG REQUEST] Trả về ${metas.length} Poster đội bóng ra màn hình Nuvio!`);
+  console.log(`\n⚡ [CATALOG REQUEST] Trả về ${metas.length} Poster đội bóng ra Nuvio!`);
   res.json({ metas });
 });
 
-// 4. Meta Endpoint (Hiển thị danh sách trận đấu khi bấm vào 1 Poster)
-app.get(['/meta/:type/:id.json', '/:config/meta/:type/:id.json', '/meta/*', '/:config/meta/*'], async (req, res) => {
+// 4. Meta Endpoint (Đã Fix giải mã ID)
+app.get(['/meta/*', '/:config/meta/*'], async (req, res) => {
   try {
-    const rawPath = req.path;
-    const cleanId = rawPath.split('/').pop().replace('.json', '');
-    const posterUrl = getPosterUrl(req);
+    const cleanId = extractCleanId(req);
 
     console.log(`\n========================================`);
     console.log(`[META REQUEST] Nuvio chọn Poster ID: ${cleanId}`);
@@ -318,7 +326,7 @@ app.get(['/meta/:type/:id.json', '/:config/meta/:type/:id.json', '/meta/*', '/:c
 
     res.json({
       meta: {
-        id: cleanId,
+        id: `mlb_team:${slug}`,
         type: 'series',
         name: `⚾ ${teamTitle}`,
         poster: posterUrl,
@@ -333,13 +341,12 @@ app.get(['/meta/:type/:id.json', '/:config/meta/:type/:id.json', '/meta/*', '/:c
   }
 });
 
-// 5. Stream Endpoint (Lấy link OK.ru / Mail.ru khi bấm xem 1 trận)
-app.get(['/stream/:type/:id.json', '/:config/stream/:type/:id.json', '/stream/*', '/:config/stream/*'], async (req, res) => {
+// 5. Stream Endpoint (Đã Fix giải mã ID)
+app.get(['/stream/*', '/:config/stream/*'], async (req, res) => {
   try {
-    const rawPath = req.path;
-    const cleanId = rawPath.split('/').pop().replace('.json', '');
+    const cleanId = extractCleanId(req);
 
-    // Cấu trúc ID: mlb_team:[slug]:1:[epNum]
+    // Cấu trúc ID sau khi decode: mlb_team:[slug]:1:[epNum]
     const parts = cleanId.split(':');
     const slug = parts[1];
     const epNum = parseInt(parts[3], 10);
@@ -402,4 +409,4 @@ app.get(['/stream/:type/:id.json', '/:config/stream/:type/:id.json', '/stream/*'
 });
 
 const PORT = process.env.PORT || 7000;
-app.listen(PORT, () => console.log(`MLB Replays Addon v2.0.0 running at http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`MLB Replays Addon v2.1.0 running at http://localhost:${PORT}`));
