@@ -14,7 +14,7 @@ dayjs.extend(customParseFormat);
 const app = express();
 app.use(cors());
 
-// Danh sách 30 đội MLB để hiển thị trên giao diện Config
+// Danh sách 30 đội MLB
 const MLB_TEAMS = [
   'Arizona Diamondbacks', 'Atlanta Braves', 'Baltimore Orioles', 'Boston Red Sox',
   'Chicago Cubs', 'Chicago White Sox', 'Cincinnati Reds', 'Cleveland Guardians',
@@ -26,13 +26,33 @@ const MLB_TEAMS = [
   'Toronto Blue Jays', 'Washington Nationals'
 ];
 
-// 1. Giao diện Cấu hình (Config UI)
-app.get(['/', '/configure'], (req, res) => {
-  const teamCheckboxes = MLB_TEAMS.map(team => `
-    <label style="display: inline-block; width: 45%; margin: 5px 2%;">
-      <input type="checkbox" name="teams" value="${team}"> ${team}
-    </label>
-  `).join('');
+// Helper phân tích cấu hình từ URL
+function parseConfig(configStr) {
+  if (!configStr) return null;
+  try {
+    let decoded = configStr;
+    if (decoded.includes('%')) {
+      try { decoded = decodeURIComponent(decoded); } catch (e) {}
+    }
+    return JSON.parse(decoded);
+  } catch (e) {
+    return null;
+  }
+}
+
+// 1. Giao diện Cấu hình (Sửa lỗi 404 khi bấm hình bánh răng trong Nuvio)
+app.get(['/', '/configure', '/:config', '/:config/configure'], (req, res) => {
+  const config = parseConfig(req.params.config);
+  const selectedTeams = (config && config.teams) ? config.teams : [];
+
+  const teamCheckboxes = MLB_TEAMS.map(team => {
+    const isChecked = selectedTeams.includes(team) ? 'checked' : '';
+    return `
+      <label style="display: inline-block; width: 45%; margin: 5px 2%;">
+        <input type="checkbox" name="teams" value="${team}" ${isChecked}> ${team}
+      </label>
+    `;
+  }).join('');
 
   const html = `
     <!DOCTYPE html>
@@ -52,7 +72,7 @@ app.get(['/', '/configure'], (req, res) => {
     <body>
       <div class="card">
         <h2>⚾ MLB Replays from Nhon Truong</h2>
-        <p>Tích chọn các đội bóng bạn muốn xem (Nếu không chọn đội nào, addon sẽ hiển thị tất cả các trận):</p>
+        <p>Tích chọn các đội bóng bạn muốn xem (Nếu không chọn đội nào, addon sẽ hiển thị tất cả):</p>
         <form id="configForm">
           <div style="max-height: 300px; overflow-y: auto; background: #252525; padding: 10px; border-radius: 5px;">
             ${teamCheckboxes}
@@ -86,17 +106,7 @@ app.get(['/', '/configure'], (req, res) => {
   res.send(html);
 });
 
-// Helper phân tích cấu hình từ URL
-function parseConfig(configStr) {
-  if (!configStr) return null;
-  try {
-    return JSON.parse(decodeURIComponent(configStr));
-  } catch (e) {
-    return null;
-  }
-}
-
-// 2. Dynamic Manifest Endpoint (Đã đổi types sang 'series' để hiện ở Home Screen)
+// 2. Dynamic Manifest Endpoint
 app.get(['/manifest.json', '/:config/manifest.json'], (req, res) => {
   const config = parseConfig(req.params.config);
   let nameExtra = '';
@@ -106,15 +116,15 @@ app.get(['/manifest.json', '/:config/manifest.json'], (req, res) => {
 
   res.json({
     id: 'org.mlblive.gmt7.nhontruong.addon',
-    version: '1.2.0',
+    version: '1.3.0',
     name: `MLB Replays from Nhon Truong${nameExtra}`,
     description: 'Replay MLB cập nhật realtime theo giờ Việt Nam (GMT+7) và lọc theo đội bóng chọn lọc',
     behaviorHints: { configurable: true, configurationRequired: false },
-    resources: ['catalog', 'stream'],
-    types: ['series', 'movie'],
+    resources: ['catalog', 'meta', 'stream'],
+    types: ['movie', 'series', 'tv'],
     catalogs: [
       {
-        type: 'series',
+        type: 'movie',
         id: 'mlblive_catalog',
         name: 'MLB Replays'
       }
@@ -122,12 +132,12 @@ app.get(['/manifest.json', '/:config/manifest.json'], (req, res) => {
   });
 });
 
-// 3. Dynamic Catalog Endpoint
+// 3. Dynamic Catalog Endpoint (Để type: 'movie' để đẩy ra Home Board)
 app.get(['/catalog/:type/:id.json', '/:config/catalog/:type/:id.json'], async (req, res) => {
   try {
     const config = parseConfig(req.params.config);
     const selectedTeams = (config && config.teams) ? config.teams : [];
-    const itemType = req.params.type || 'series';
+    const itemType = req.params.type || 'movie';
 
     const { data } = await axios.get('https://mlblive.net/', {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
@@ -178,7 +188,38 @@ app.get(['/catalog/:type/:id.json', '/:config/catalog/:type/:id.json'], async (r
   }
 });
 
-// 4. Dynamic Stream Endpoint
+// 4. Endpoint Meta (Bổ sung để Nuvio hiển thị trang chi tiết video mượt mà)
+app.get(['/meta/:type/:id.json', '/:config/meta/:type/:id.json'], async (req, res) => {
+  try {
+    const rawId = req.params.id.replace('.json', '');
+    const targetUrl = Buffer.from(rawId, 'base64').toString('utf-8');
+    const itemType = req.params.type || 'movie';
+
+    const { data } = await axios.get(targetUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+    });
+
+    const $ = cheerio.load(data);
+    const title = $('h1').text().trim() || 'MLB Match Replay';
+    let img = $('.post-thumb img, article img').first().attr('src');
+    if (img && !img.startsWith('http')) img = `https://mlblive.net${img}`;
+
+    res.json({
+      meta: {
+        id: rawId,
+        type: itemType,
+        name: title,
+        poster: img || '',
+        background: img || '',
+        description: `Trận đấu MLB Replay từ mlblive.net\nAddon phát triển bởi Nhon Truong`
+      }
+    });
+  } catch (err) {
+    res.json({ meta: {} });
+  }
+});
+
+// 5. Dynamic Stream Endpoint
 app.get(['/stream/:type/:id.json', '/:config/stream/:type/:id.json'], async (req, res) => {
   try {
     const rawId = req.params.id.replace('.json', '');
