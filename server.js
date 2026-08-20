@@ -52,6 +52,42 @@ const HTTP_HEADERS = {
   'Referer': 'https://mlblive.net/'
 };
 
+// HÀM BÓC TÁCH LINK VIDEO TRỰC TIẾP (.m3u8 / .mp4) TỪ OK.RU
+async function getOkRuDirectUrl(embedUrl) {
+  try {
+    const { data } = await axios.get(embedUrl, { headers: HTTP_HEADERS, timeout: 5000 });
+    const $ = cheerio.load(data);
+    
+    // OK.ru giấu config trong attribute data-options
+    const dataOptions = $('div[data-module="OKVideo"]').attr('data-options') || $('div[data-options]').attr('data-options');
+    
+    if (dataOptions) {
+      const options = JSON.parse(dataOptions);
+      const metadataStr = options.flashvars ? options.flashvars.metadata : options.metadata;
+      
+      if (metadataStr) {
+        const metadata = typeof metadataStr === 'string' ? JSON.parse(metadataStr) : metadataStr;
+        
+        // Ưu tiên 1: Lấy link HLS (.m3u8) để stream mượt nhất
+        if (metadata.hlsManifestUrl) {
+          console.log(`   ⚡ [PARSER OK.RU] Lấy thành công link HLS (.m3u8)`);
+          return metadata.hlsManifestUrl;
+        }
+        
+        // Ưu tiên 2: Lấy link MP4 chất lượng cao nhất
+        if (metadata.videos && metadata.videos.length > 0) {
+          const bestVideo = metadata.videos[metadata.videos.length - 1]; // Phần tử cuối thường là chất lượng cao nhất (1080p/720p)
+          console.log(`   ⚡ [PARSER OK.RU] Lấy thành công link MP4 (${bestVideo.name})`);
+          return bestVideo.url;
+        }
+      }
+    }
+  } catch (err) {
+    console.error(`   ⚠️ [PARSER OK.RU FAIL] Không parse được direct link, dùng link gốc embed:`, err.message);
+  }
+  return embedUrl; // Fallback nếu parse lỗi
+}
+
 async function fetchDodgersArticles() {
   try {
     console.log(`\n========================================`);
@@ -154,7 +190,7 @@ app.get(['/', '/configure'], (req, res) => {
 app.get('/manifest.json', (req, res) => {
   res.json({
     id: 'org.dodgersreplays.gmt7.nhontruong.addon',
-    version: '3.5.0',
+    version: '3.6.0',
     name: 'Dodgers Replays',
     description: 'Tổng hợp toàn bộ trận đấu Replay của Los Angeles Dodgers',
     resources: [
@@ -231,7 +267,7 @@ app.get('/meta/*', async (req, res) => {
   }
 });
 
-// 4. Stream Endpoint (Ép OK.ru về dạng /videoembed/ nhẹ nhất)
+// 4. Stream Endpoint (Giải mã trực tiếp stream từ OK.ru)
 app.get('/stream/*', async (req, res) => {
   try {
     const cleanId = extractCleanId(req);
@@ -251,44 +287,46 @@ app.get('/stream/*', async (req, res) => {
 
     const { data } = await axios.get(targetArticle.href, { headers: HTTP_HEADERS, timeout: 8000 });
     const $ = cheerio.load(data);
-    const streams = [];
+    const iframeUrls = [];
 
-    $('iframe').each((index, el) => {
+    $('iframe').each((_, el) => {
       let src = $(el).attr('src') || $(el).attr('data-src') || $(el).attr('data-lazy-src');
-      
       if (src) {
-        if (src.startsWith('//')) {
-          src = 'https:' + src;
-        }
-
-        // TỐI ƯU TỐC ĐỘ: Bắt buộc dùng /videoembed/ cho OK.ru
-        if (src.includes('ok.ru/video/')) {
-          src = src.replace('ok.ru/video/', 'ok.ru/videoembed/');
-        }
-
-        let serverName = `Server #${index + 1}`;
-        if (src.includes('ok.ru')) {
-          serverName = `⚾ OK.ru Direct #${index + 1}`;
-        } else if (src.includes('mail.ru')) {
-          serverName = `⚾ Mail.ru Direct #${index + 1}`;
-        }
-
-        streams.push({
-          title: serverName,
-          url: src,
-          behaviorHints: {
-            requestHeaders: { 
-              'Referer': 'https://mlblive.net/',
-              'User-Agent': HTTP_HEADERS['User-Agent']
-            }
-          }
-        });
-
-        console.log(` ➔ [STREAM LINK #${index + 1}] (${serverName}): ${src}`);
+        if (src.startsWith('//')) src = 'https:' + src;
+        iframeUrls.push(src);
       }
     });
 
-    console.log(`[STREAM SUCCESS] Tìm thấy tổng cộng ${streams.length} luồng stream.`);
+    const streams = [];
+
+    // Xử lý bóc tách từng iframe để lấy direct link
+    for (let index = 0; index < iframeUrls.length; index++) {
+      let src = iframeUrls[index];
+      let serverName = `Server #${index + 1}`;
+
+      if (src.includes('ok.ru')) {
+        serverName = `⚡ OK.ru Fast Direct #${index + 1}`;
+        // Gọi hàm bóc tách link video thực sự từ OK.ru
+        src = await getOkRuDirectUrl(src);
+      } else if (src.includes('mail.ru')) {
+        serverName = `⚾ Mail.ru #${index + 1}`;
+      }
+
+      streams.push({
+        title: serverName,
+        url: src,
+        behaviorHints: {
+          requestHeaders: { 
+            'User-Agent': HTTP_HEADERS['User-Agent'],
+            'Referer': 'https://ok.ru/'
+          }
+        }
+      });
+
+      console.log(` ➔ [DIRECT STREAM #${index + 1}] (${serverName}): ${src}`);
+    }
+
+    console.log(`[STREAM SUCCESS] Trả về ${streams.length} luồng stream trực tiếp.`);
     console.log(`========================================\n`);
 
     res.json({ streams });
@@ -299,4 +337,4 @@ app.get('/stream/*', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 7000;
-app.listen(PORT, () => console.log(`Dodgers Replays Addon v3.5.0 running at http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`Dodgers Replays Addon v3.6.0 running at http://localhost:${PORT}`));
