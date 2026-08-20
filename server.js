@@ -83,12 +83,11 @@ async function fetchArticlesFromUrl(targetUrl) {
   }
 
   try {
-    console.log(`[SCRAPE] Đang cào dữ liệu danh sách từ: ${targetUrl}`);
+    console.log(`[SCRAPE] Đang cào dữ liệu từ: ${targetUrl}`);
     const { data } = await axios.get(targetUrl, { headers: HTTP_HEADERS, timeout: 8000 });
     const $ = cheerio.load(data);
     const articles = [];
     const seenHrefs = new Set();
-    const currentYear = dayjs().year();
 
     $('a').each((_, el) => {
       let href = $(el).attr('href');
@@ -106,21 +105,14 @@ async function fetchArticlesFromUrl(targetUrl) {
       const dateMatch = title.match(/(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}/i);
       let dateVNText = 'Không rõ ngày';
       let dateISO = new Date().toISOString();
-      let articleYear = null;
 
       if (dateMatch) {
         const parsedDate = dayjs.tz(dateMatch[0], 'MMMM D, YYYY', 'America/New_York');
         if (parsedDate.isValid()) {
           dateVNText = parsedDate.tz('Asia/Ho_Chi_Minh').format('DD/MM/YYYY');
           dateISO = parsedDate.toISOString();
-          articleYear = parsedDate.year();
         }
-      } else {
-        const yearMatch = title.match(/\b(20\d{2})\b/);
-        if (yearMatch) articleYear = parseInt(yearMatch[1], 10);
       }
-
-      if (articleYear && articleYear !== currentYear) return;
 
       const parent = $(el).closest('div, li, article');
       let img = parent.find('img').attr('data-lazy-src') || 
@@ -130,7 +122,7 @@ async function fetchArticlesFromUrl(targetUrl) {
 
       seenHrefs.add(href);
       articles.push({
-        id: 'vid_' + Buffer.from(href).toString('base64'),
+        rawHash: Buffer.from(href).toString('base64'),
         title,
         href,
         img,
@@ -139,7 +131,7 @@ async function fetchArticlesFromUrl(targetUrl) {
       });
     });
 
-    console.log(`[SCRAPE SUCCESS] Tìm thấy ${articles.length} trận đấu!`);
+    console.log(`[SCRAPE SUCCESS] Tìm thấy ${articles.length} bài viết.`);
     articlesCache[targetUrl] = { data: articles, lastFetch: now };
     return articles;
   } catch (err) {
@@ -222,7 +214,7 @@ app.get(['/manifest.json', '/:config/manifest.json'], (req, res) => {
 
   res.json({
     id: 'org.mlblive.gmt7.nhontruong.addon',
-    version: '1.5.4',
+    version: '1.5.5',
     name: `MLB Replays${nameExtra}`,
     description: 'Trung tâm tổng hợp Replay MLB phân loại theo đội bóng',
     behaviorHints: { configurable: true, configurationRequired: false },
@@ -255,8 +247,10 @@ app.get(['/catalog/*', '/:config/catalog/*'], (req, res) => {
   });
 });
 
-// 4. Meta
+// 4. Meta Endpoint (ĐÃ SỬA CHUẨN ID TẬP CHO NUVIO)
 app.get(['/meta/*', '/:config/meta/*'], async (req, res) => {
+  console.log(`\n========================================`);
+  console.log(`[META REQUEST] Nuvio đang mở chi tiết Hub!`);
   try {
     const config = parseConfig(req.params.config);
     const selectedTeams = (config && config.teams) ? config.teams : [];
@@ -279,7 +273,7 @@ app.get(['/meta/*', '/:config/meta/*'], async (req, res) => {
 
         articles.forEach(art => {
           videos.push({
-            id: art.id,
+            id: `mlb_replays_hub:vid_${art.rawHash}`, // ID chuẩn định dạng Stremio/Nuvio
             title: art.title,
             season: seasonNum,
             episode: epNum++,
@@ -290,12 +284,12 @@ app.get(['/meta/*', '/:config/meta/*'], async (req, res) => {
         });
       }
     } else {
-      seasonLegend = '• Season 1: Tất cả các trận mới nhất năm nay';
+      seasonLegend = '• Season 1: Tất cả các trận mới nhất';
       const articles = await fetchArticlesFromUrl('https://mlblive.net/');
       let epNum = 1;
       articles.forEach(art => {
         videos.push({
-          id: art.id,
+          id: `mlb_replays_hub:vid_${art.rawHash}`,
           title: art.title,
           season: 1,
           episode: epNum++,
@@ -305,6 +299,9 @@ app.get(['/meta/*', '/:config/meta/*'], async (req, res) => {
         });
       });
     }
+
+    console.log(`[META SUCCESS] Trả về tổng cộng ${videos.length} tập cho Nuvio.`);
+    console.log(`========================================\n`);
 
     res.json({
       meta: {
@@ -318,12 +315,12 @@ app.get(['/meta/*', '/:config/meta/*'], async (req, res) => {
       }
     });
   } catch (err) {
-    console.error('[META ERROR]:', err.message);
+    console.error('❌ [META ERROR]:', err.message);
     res.json({ meta: { id: 'mlb_replays_hub', type: 'series', name: '⚾ MLB Replays Hub', videos: [] } });
   }
 });
 
-// 5. Stream Endpoint (LOG CHI TIẾT LOGIC CÀO OK.RU)
+// 5. Stream Endpoint
 app.get(['/stream/*', '/:config/stream/*'], async (req, res) => {
   try {
     const fullPath = req.path;
@@ -331,6 +328,10 @@ app.get(['/stream/*', '/:config/stream/*'], async (req, res) => {
     const rawFilename = parts[parts.length - 1];
     let rawId = rawFilename.replace('.json', '');
 
+    // Giải mã ID dạng mlb_replays_hub:vid_aHR0...
+    if (rawId.includes(':')) {
+      rawId = rawId.split(':').pop();
+    }
     if (rawId.startsWith('vid_')) {
       rawId = rawId.replace('vid_', '');
     }
@@ -352,7 +353,6 @@ app.get(['/stream/*', '/:config/stream/*'], async (req, res) => {
     const { data } = await axios.get(targetUrl, { headers: HTTP_HEADERS, timeout: 8000 });
     const $ = cheerio.load(data);
     const streams = [];
-    let hasOkRu = false;
 
     $('iframe').each((index, el) => {
       let src = $(el).attr('src') || $(el).attr('data-src') || $(el).attr('data-lazy-src');
@@ -362,16 +362,11 @@ app.get(['/stream/*', '/:config/stream/*'], async (req, res) => {
           src = 'https:' + src;
         }
 
-        console.log(` ➜ [IFRAME #${index + 1}] Tìm thấy link: ${src}`);
-
         let serverName = `Server #${index + 1}`;
         if (src.includes('ok.ru')) {
-          hasOkRu = true;
           serverName = `⚾ OK.ru Direct #${index + 1}`;
-          console.log(`    ✅ [OK.RU CHECK] Lấy thành công link OK.ru!`);
         } else if (src.includes('mail.ru')) {
           serverName = `⚾ Mail.ru Direct #${index + 1}`;
-          console.log(`    📦 [MAIL.RU CHECK] Lấy thành công link Mail.ru!`);
         }
 
         streams.push({
@@ -387,11 +382,7 @@ app.get(['/stream/*', '/:config/stream/*'], async (req, res) => {
       }
     });
 
-    if (hasOkRu) {
-      console.log(`🎉 [STREAM RESULT] ĐÃ BẮT ĐƯỢC LINK OK.RU THÀNH CÔNG!`);
-    } else {
-      console.log(`⚠️ [STREAM RESULT] Không tìm thấy link OK.ru trong bài viết này (Tìm thấy ${streams.length} iframe khác).`);
-    }
+    console.log(`[STREAM SUCCESS] Tìm thấy ${streams.length} luồng stream.`);
     console.log(`========================================\n`);
 
     res.json({ streams });
@@ -402,4 +393,4 @@ app.get(['/stream/*', '/:config/stream/*'], async (req, res) => {
 });
 
 const PORT = process.env.PORT || 7000;
-app.listen(PORT, () => console.log(`MLB Replays Addon v1.5.4 running at http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`MLB Replays Addon v1.5.5 running at http://localhost:${PORT}`));
