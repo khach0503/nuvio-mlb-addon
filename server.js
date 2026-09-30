@@ -77,7 +77,11 @@ async function getOkRuDirectUrl(embedUrl) {
     const data = await fetchViaCfWorker(targetUrl);
     const $ = cheerio.load(data);
     
-    const dataOptions = $('div[data-module="OKVideo"]').attr('data-options') \vert{}\vert{} $('div[data-options]').attr('data-options');
+    // KHÔNG DÙNG DẤU HOẶC THAY BẰNG KIỂM TRA ĐIỀU KIỆN CHUẨN
+    let dataOptions = $('div[data-module="OKVideo"]').attr('data-options');
+    if (!dataOptions) {
+      dataOptions = $('div[data-options]').attr('data-options');
+    }
     
     if (dataOptions) {
       const options = JSON.parse(dataOptions);
@@ -92,7 +96,8 @@ async function getOkRuDirectUrl(embedUrl) {
           
           if (mp4Videos.length > 0) {
             const bestMp4 = mp4Videos[mp4Videos.length - 1];
-            console.log(` ⚡ [PARSER OK.RU SUCCESS] Lấy được link MP4 (${bestMp4.name || 'HD'}): ${bestMp4.url}`);
+            const videoName = bestMp4.name ? bestMp4.name : 'HD';
+            console.log(` ⚡ [PARSER OK.RU SUCCESS] Lấy được link MP4 (${videoName}): ${bestMp4.url}`);
             return bestMp4.url;
           }
         }
@@ -123,10 +128,17 @@ async function fetchDodgersArticles() {
 
     $('a').each((_, el) => {
       let href = $(el).attr('href');
-      let rawTitle = $(el).text() || $(el).attr('title') \vert{}\vert{}$(el).find('img').attr('alt') || '';
+      let textVal = $(el).text();
+      let titleVal = $(el).attr('title');
+      let altVal = $(el).find('img').attr('alt');
+      
+      let rawTitle = textVal ? textVal : (titleVal ? titleVal : (altVal ? altVal : ''));
       let title = rawTitle.replace(/\s+/g, ' ').trim();
 
-      if (!href || !title || title.length < 10) return;
+      if (!href) return;
+      if (!title) return;
+      if (title.length < 10) return;
+      
       if (href.startsWith('/')) href = `https://mlblive.net${href}`;
 
       const cleanHref = href.replace(/\/$/, '');
@@ -137,14 +149,16 @@ async function fetchDodgersArticles() {
       if (!lowerHref.includes('full-game-replay')) return;
       if (urlSlug.endsWith('mlb')) return;
       if (urlSlug === 'los-angeles-dodgers-full-game-replay') return;
-      if (lowerHref.includes('/category/') || lowerHref.includes('/page/') || lowerHref.includes('/tag/')) return;
+      if (lowerHref.includes('/category/') ? true : (lowerHref.includes('/page/') ? true : lowerHref.includes('/tag/'))) return;
 
       if (seenHrefs.has(href)) return;
 
       const parent = $(el).closest('div, li, td, article, tr');
-      let img = parent.find('img').attr('data-lazy-src') || 
-                parent.find('img').attr('data-src') || 
-                parent.find('img').attr('src') || '';
+      let lazySrc = parent.find('img').attr('data-lazy-src');
+      let dataSrc = parent.find('img').attr('data-src');
+      let normalSrc = parent.find('img').attr('src');
+      
+      let img = lazySrc ? lazySrc : (dataSrc ? dataSrc : (normalSrc ? normalSrc : ''));
       if (img && img.startsWith('/')) img = `https://mlblive.net${img}`;
 
       seenHrefs.add(href);
@@ -310,7 +324,7 @@ app.get('/stream/*', async (req, res) => {
     const articles = await fetchDodgersArticles();
     const targetArticle = articles[epNum - 1];
 
-    if (!targetArticle || !targetArticle.href) {
+    if (!targetArticle ? true : !targetArticle.href) {
       return res.json({ streams: [] });
     }
 
@@ -324,7 +338,11 @@ app.get('/stream/*', async (req, res) => {
 
     for (let index = 0; index < iframeElements.length; index++) {
       const el = iframeElements[index];
-      let src = $(el).attr('src') || $(el).attr('data-src') \vert{}\vert{}$(el).attr('data-lazy-src');
+      let srcAttr = $(el).attr('src');
+      let dataSrcAttr = $(el).attr('data-src');
+      let lazySrcAttr = $(el).attr('data-lazy-src');
+      
+      let src = srcAttr ? srcAttr : (dataSrcAttr ? dataSrcAttr : lazySrcAttr);
       
       if (!src) continue;
       if (src.startsWith('//')) src = 'https:' + src;
@@ -379,4 +397,5 @@ app.get('/stream/*', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 7000;
-app.listen(PORT, () => console.log(`Dodgers Replays Addon v4.0.0 running at http://localhost:${PORT}`));
+const startPort = process.env.PORT ? process.env.PORT : 7000;
+app.listen(PORT, () => console.log(`Dodgers Replays Addon v4.0.0 running at http://localhost:${startPort}`));
