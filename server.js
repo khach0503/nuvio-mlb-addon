@@ -18,8 +18,13 @@ app.use(express.static(__dirname));
 
 const DODGERS_URL = 'https://mlblive.net/los-angeles-dodgers-full-game-replay';
 
-// 🔴 CLOUDFLARE WORKER PROXY CỦA M:
-const CF_WORKER_URL = 'https://curly-credit-e5f0.ntp-ntp2.workers.dev'; 
+// Header giả lập trình duyệt thật
+const HTTP_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Referer': 'https://mlblive.net/'
+};
 
 function getPosterUrl(req) {
   return `${req.protocol}://${req.get('host')}/poster.jpg`;
@@ -47,23 +52,16 @@ function parseReleaseDate(title) {
   return new Date().toISOString();
 }
 
-const HTTP_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-  'Referer': 'https://mlblive.net/'
-};
-
-// HÀM HOÀNG GIA: GỬI REQUEST THÔNG QUA CLOUDFLARE WORKER ĐỂ TRÁNH LỖI 403
+// 💥 HÀM LẤY DATA BẰNG CORSPROXY.IO ĐỂ BYPASS CLOUDFLARE BOT PROTECTION
 async function fetchViaCfWorker(targetUrl) {
-  if (CF_WORKER_URL && CF_WORKER_URL.trim() !== '') {
-    const cleanWorker = CF_WORKER_URL.replace(/\/$/, '');
-    const proxyUrl = `${cleanWorker}?url=${encodeURIComponent(targetUrl)}`;
-    const { data } = await axios.get(proxyUrl, { headers: HTTP_HEADERS, timeout: 10000 });
+  try {
+    const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
+    const { data } = await axios.get(proxyUrl, { headers: HTTP_HEADERS, timeout: 15000 });
     return data;
+  } catch (err) {
+    console.error(`❌ [CORSPROXY ERROR]: ${err.message}`);
+    throw err;
   }
-  // Dự phòng nếu không có Worker
-  const { data } = await axios.get(targetUrl, { headers: HTTP_HEADERS, timeout: 10000 });
-  return data;
 }
 
 // HÀM BÓC TÁCH ÉP ƯU TIÊN LẤY LINK MP4 TRỰC TIẾP TỪ OK.RU
@@ -77,7 +75,6 @@ async function getOkRuDirectUrl(embedUrl) {
     const data = await fetchViaCfWorker(targetUrl);
     const $ = cheerio.load(data);
     
-    // KHÔNG DÙNG DẤU HOẶC THAY BẰNG KIỂM TRA ĐIỀU KIỆN CHUẨN
     let dataOptions = $('div[data-module="OKVideo"]').attr('data-options');
     if (!dataOptions) {
       dataOptions = $('div[data-options]').attr('data-options');
@@ -90,7 +87,7 @@ async function getOkRuDirectUrl(embedUrl) {
       if (metadataStr) {
         const metadata = typeof metadataStr === 'string' ? JSON.parse(metadataStr) : metadataStr;
         
-        // 1. ÉP LẤY LINK MP4 (Ưu tiên MP4 chất lượng cao nhất: 1080p/720p)
+        // 1. ÉP LẤY LINK MP4 (Ưu tiên MP4 chất lượng cao)
         if (metadata.videos && metadata.videos.length > 0) {
           const mp4Videos = metadata.videos.filter(v => v.url && !v.url.includes('.m3u8'));
           
@@ -115,11 +112,11 @@ async function getOkRuDirectUrl(embedUrl) {
   return null;
 }
 
-// CÀO BÀI VIẾT TỪ MLB LIVE (ĐÃ THAY BẰNG CF WORKER PROXY)
+// CÀO BÀI VIẾT TỪ MLB LIVE
 async function fetchDodgersArticles() {
   try {
     console.log(`\n========================================`);
-    console.log(`[SCRAPE REFRESH] Đang cào qua Cloudflare Worker từ:\n${DODGERS_URL}`);
+    console.log(`[SCRAPE REFRESH] Đang cào dữ liệu qua CorsProxy từ:\n${DODGERS_URL}`);
     
     const data = await fetchViaCfWorker(DODGERS_URL);
     const $ = cheerio.load(data);
@@ -196,7 +193,7 @@ app.get(['/', '/configure'], (req, res) => {
     <body>
       <div class="card">
         <h2>⚾ Dodgers Replays Addon</h2>
-        <div class="status">● ONLINE (v4.0.0 - CF Bypass)</div>
+        <div class="status">● ONLINE (v4.1.0 - CorsProxy Bypass)</div>
         <p style="color: #ccc; font-size: 0.95em;">Addon tổng hợp các trận đấu Replay của Los Angeles Dodgers cho Stremio / Nuvio.</p>
         <p style="margin-top: 20px; text-align: left; color: #aaa; font-size: 0.85em;">Link Manifest cài đặt:</p>
         <input type="text" id="link" value="${manifestUrl}" readonly>
@@ -220,7 +217,7 @@ app.get(['/', '/configure'], (req, res) => {
 app.get('/manifest.json', (req, res) => {
   res.json({
     id: 'org.dodgersreplays.gmt7.nhontruong.addon',
-    version: '4.0.0',
+    version: '4.1.0',
     name: 'Dodgers Replays',
     description: 'Tổng hợp toàn bộ trận đấu Replay của Los Angeles Dodgers',
     resources: [
@@ -279,7 +276,7 @@ app.get('/meta/*', async (req, res) => {
   }
 });
 
-// 4. Render Proxy Endpoint (Dự phòng)
+// 4. Proxy Stream Endpoint
 app.get('/proxy', async (req, res) => {
   const videoUrl = req.query.url;
   if (!videoUrl) return res.status(400).send('Missing URL');
@@ -299,7 +296,7 @@ app.get('/proxy', async (req, res) => {
       url: videoUrl,
       headers: headers,
       responseType: 'stream',
-      timeout: 10000
+      timeout: 15000
     });
 
     res.status(response.status);
@@ -355,16 +352,10 @@ app.get('/stream/*', async (req, res) => {
         const directMediaUrl = await getOkRuDirectUrl(src);
         
         if (directMediaUrl) {
-          if (CF_WORKER_URL && CF_WORKER_URL.trim() !== '') {
-            const cleanCfWorker = CF_WORKER_URL.replace(/\/$/, '');
-            streamUrl = `${cleanCfWorker}?url=${encodeURIComponent(directMediaUrl)}`;
-            console.log(` ➔ [USING CLOUDFLARE PROXY]: ${streamUrl}`);
-          } else {
-            const host = req.get('host');
-            const protocol = req.protocol;
-            streamUrl = `${protocol}://${host}/proxy?url=${encodeURIComponent(directMediaUrl)}`;
-            console.log(` ➔ [USING RENDER PROXY]: ${streamUrl}`);
-          }
+          const host = req.get('host');
+          const protocol = req.protocol;
+          streamUrl = `${protocol}://${host}/proxy?url=${encodeURIComponent(directMediaUrl)}`;
+          console.log(` ➔ [USING PROXY STREAM]: ${streamUrl}`);
         } else {
           console.log(` ⚠️ [PARSE FAIL] Dùng link Embed dự phòng: ${src}`);
           if (src.includes('ok.ru/video/')) {
@@ -398,4 +389,4 @@ app.get('/stream/*', async (req, res) => {
 
 const PORT = process.env.PORT || 7000;
 const startPort = process.env.PORT ? process.env.PORT : 7000;
-app.listen(PORT, () => console.log(`Dodgers Replays Addon v4.0.0 running at http://localhost:${startPort}`));
+app.listen(PORT, () => console.log(`Dodgers Replays Addon v4.1.0 running at http://localhost:${startPort}`));
