@@ -18,16 +18,9 @@ app.use(express.static(__dirname));
 
 const DODGERS_URL = 'https://mlblive.net/los-angeles-dodgers-full-game-replay';
 
-// 🔑 DÁN API KEY THẬT CỦA M VÀO GIỮA 2 DẤU NHÁY ĐƠN DƯỚI ĐÂY
-const SCRAPINGANT_API_KEY = process.env.SCRAPINGANT_API_KEY || '1751bbe63d6b4b0ab67e948e352be32c';
-
-// Header giả lập trình duyệt thật
-const HTTP_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-  'Accept-Language': 'en-US,en;q=0.9',
-  'Referer': 'https://mlblive.net/'
-};
+// 🔴 ĐỌC API KEY TỪ ENVIRONMENT VARIABLES (HOẶC DÙNG KEY MẶC ĐỊNH)
+const SCRAPINGANT_API_KEY = process.env.SCRAPINGANT_API_KEY ? process.env.SCRAPINGANT_API_KEY : '1751bbe63d6b4b0ab67e948e352be32c';
+const SCRAPERAPI_KEY = process.env.SCRAPERAPI_KEY ? process.env.SCRAPERAPI_KEY : 'd5ff646ae35dd939e90d972afecbcea2';
 
 function getPosterUrl(req) {
   return `${req.protocol}://${req.get('host')}/poster.jpg`;
@@ -55,25 +48,44 @@ function parseReleaseDate(title) {
   return new Date().toISOString();
 }
 
-// 💥 HÀM BÀO DATA QUA SCRAPINGANT (DÙNG HEADER X-API-KEY TRÁNH LỖI 422)
-async function fetchViaCfWorker(targetUrl) {
+const HTTP_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Referer': 'https://mlblive.net/'
+};
+
+// ⚡ HÀM FETCH BẮT CẶP: SCRAPINGANT -> FALLBACK SCRAPERAPI
+async function fetchWithFallback(targetUrl) {
+  // 1. CHẠY SCRAPINGANT TRƯỚC
   try {
-    console.log(`⏳ [SCRAPINGANT] Đang lấy dữ liệu từ: ${targetUrl}`);
-    
-    // Đã loại bỏ apiKey trên URL, gửi qua Header x-api-key
-    const apiUrl = `https://api.scrapingant.com/v2/general?url=${encodeURIComponent(targetUrl)}&browser=true`;
-    
-    const { data } = await axios.get(apiUrl, {
-      headers: {
-        'x-api-key': SCRAPINGANT_API_KEY
-      },
-      timeout: 45000 
-    });
-    return data;
+    if (SCRAPINGANT_API_KEY && SCRAPINGANT_API_KEY !== 'điền_scrapingant_key_ở_đây') {
+      console.log(` 🚀 [1/2] Đang fetch qua ScrapingAnt...`);
+      const antUrl = `https://api.scrapingant.com/v2/general?x-api-key=${SCRAPINGANT_API_KEY}&url=${encodeURIComponent(targetUrl)}&browser=true`;
+      const { data } = await axios.get(antUrl, { timeout: 15000 });
+      console.log(` ✅ [SCRAPINGANT SUCCESS]`);
+      return data;
+    }
   } catch (err) {
-    console.error(`❌ [SCRAPINGANT ERROR]:`, err.response?.data || err.message);
-    throw err;
+    console.error(` ⚠️ [SCRAPINGANT FAIL]: ${err.message} -> Tự động nhảy sang ScraperAPI...`);
   }
+
+  // 2. FALLBACK SANG SCRAPERAPI NẾU SCRAPINGANT LỖI / HẾT CREDIT
+  try {
+    if (SCRAPERAPI_KEY && SCRAPERAPI_KEY !== 'điền_scraperapi_key_ở_đây') {
+      console.log(` 🔄 [2/2] Đang fetch dự phòng qua ScraperAPI...`);
+      const scraperApiUrl = `http://api.scraperapi.com?api_key=${SCRAPERAPI_KEY}&url=${encodeURIComponent(targetUrl)}&render=true`;
+      const { data } = await axios.get(scraperApiUrl, { timeout: 15000 });
+      console.log(` ✅ [SCRAPERAPI SUCCESS]`);
+      return data;
+    }
+  } catch (err) {
+    console.error(` ❌ [SCRAPERAPI FAIL]: ${err.message}`);
+  }
+
+  // 3. DỰ PHÒNG CUỐI CÙNG: GỌI TRỰC TIẾP AXIOS
+  console.log(` ⚠️ [FALLBACK DIRECT] Gọi trực tiếp Axios...`);
+  const { data } = await axios.get(targetUrl, { headers: HTTP_HEADERS, timeout: 10000 });
+  return data;
 }
 
 // HÀM BÓC TÁCH ÉP ƯU TIÊN LẤY LINK MP4 TRỰC TIẾP TỪ OK.RU
@@ -84,7 +96,7 @@ async function getOkRuDirectUrl(embedUrl) {
       targetUrl = targetUrl.replace('ok.ru/video/', 'ok.ru/videoembed/');
     }
 
-    const data = await fetchViaCfWorker(targetUrl);
+    const data = await fetchWithFallback(targetUrl);
     const $ = cheerio.load(data);
     
     let dataOptions = $('div[data-module="OKVideo"]').attr('data-options');
@@ -99,7 +111,7 @@ async function getOkRuDirectUrl(embedUrl) {
       if (metadataStr) {
         const metadata = typeof metadataStr === 'string' ? JSON.parse(metadataStr) : metadataStr;
         
-        // 1. ÉP LẤY LINK MP4 (Ưu tiên MP4 chất lượng cao)
+        // 1. ÉP LẤY LINK MP4 (Ưu tiên MP4 chất lượng cao nhất: 1080p/720p)
         if (metadata.videos && metadata.videos.length > 0) {
           const mp4Videos = metadata.videos.filter(v => v.url && !v.url.includes('.m3u8'));
           
@@ -128,9 +140,9 @@ async function getOkRuDirectUrl(embedUrl) {
 async function fetchDodgersArticles() {
   try {
     console.log(`\n========================================`);
-    console.log(`[SCRAPE REFRESH] Đang cào dữ liệu qua ScrapingAnt từ:\n${DODGERS_URL}`);
+    console.log(`[SCRAPE REFRESH] Đang cào dữ liệu từ:\n${DODGERS_URL}`);
     
-    const data = await fetchViaCfWorker(DODGERS_URL);
+    const data = await fetchWithFallback(DODGERS_URL);
     const $ = cheerio.load(data);
     const articles = [];
     const seenHrefs = new Set();
@@ -205,7 +217,7 @@ app.get(['/', '/configure'], (req, res) => {
     <body>
       <div class="card">
         <h2>⚾ Dodgers Replays Addon</h2>
-        <div class="status">● ONLINE (v4.3.0 - ScrapingAnt Bypass)</div>
+        <div class="status">● ONLINE (v4.2.0 - ScrapingAnt & ScraperAPI)</div>
         <p style="color: #ccc; font-size: 0.95em;">Addon tổng hợp các trận đấu Replay của Los Angeles Dodgers cho Stremio / Nuvio.</p>
         <p style="margin-top: 20px; text-align: left; color: #aaa; font-size: 0.85em;">Link Manifest cài đặt:</p>
         <input type="text" id="link" value="${manifestUrl}" readonly>
@@ -229,7 +241,7 @@ app.get(['/', '/configure'], (req, res) => {
 app.get('/manifest.json', (req, res) => {
   res.json({
     id: 'org.dodgersreplays.gmt7.nhontruong.addon',
-    version: '4.3.0',
+    version: '4.2.0',
     name: 'Dodgers Replays',
     description: 'Tổng hợp toàn bộ trận đấu Replay của Los Angeles Dodgers',
     resources: [
@@ -288,7 +300,7 @@ app.get('/meta/*', async (req, res) => {
   }
 });
 
-// 4. Proxy Stream Endpoint
+// 4. Render Proxy Endpoint (Dự phòng cho Stream OK.ru)
 app.get('/proxy', async (req, res) => {
   const videoUrl = req.query.url;
   if (!videoUrl) return res.status(400).send('Missing URL');
@@ -308,7 +320,7 @@ app.get('/proxy', async (req, res) => {
       url: videoUrl,
       headers: headers,
       responseType: 'stream',
-      timeout: 15000
+      timeout: 10000
     });
 
     res.status(response.status);
@@ -340,7 +352,7 @@ app.get('/stream/*', async (req, res) => {
     console.log(`\n========================================`);
     console.log(`[STREAM REQUEST] Tập #${epNum} (${targetArticle.title})\nBài viết: ${targetArticle.href}`);
 
-    const data = await fetchViaCfWorker(targetArticle.href);
+    const data = await fetchWithFallback(targetArticle.href);
     const $ = cheerio.load(data);
     const streams = [];
     const iframeElements = $('iframe').toArray();
@@ -367,7 +379,7 @@ app.get('/stream/*', async (req, res) => {
           const host = req.get('host');
           const protocol = req.protocol;
           streamUrl = `${protocol}://${host}/proxy?url=${encodeURIComponent(directMediaUrl)}`;
-          console.log(` ➔ [USING PROXY STREAM]: ${streamUrl}`);
+          console.log(` ➔ [USING RENDER PROXY]: ${streamUrl}`);
         } else {
           console.log(` ⚠️ [PARSE FAIL] Dùng link Embed dự phòng: ${src}`);
           if (src.includes('ok.ru/video/')) {
@@ -401,4 +413,4 @@ app.get('/stream/*', async (req, res) => {
 
 const PORT = process.env.PORT || 7000;
 const startPort = process.env.PORT ? process.env.PORT : 7000;
-app.listen(PORT, () => console.log(`Dodgers Replays Addon v4.3.0 running at http://localhost:${startPort}`));
+app.listen(PORT, () => console.log(`Dodgers Replays Addon v4.2.0 running at http://localhost:${startPort}`));
