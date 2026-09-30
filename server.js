@@ -18,11 +18,15 @@ app.use(express.static(__dirname));
 
 const DODGERS_URL = 'https://mlblive.net/los-angeles-dodgers-full-game-replay';
 
-// Header giả lập trình duyệt thật
+// 🔑 DÁN COOKIE CF_CLEARANCE LẤY TỪ TRÌNH DUYỆT VÀO ĐÂY
+const CF_CLEARANCE_COOKIE = '6raiyb03aOMJ2_nd6LzWoqnps4oKrVtaZNVgy57paFQ-1790768196-1.2.1.1-AhOyESXovd8gvtCfUJv5tFlJUWdN698Qj9UtmUy_r1ghXGV2dY4pAU64utVL8PIKXmuTFb22QkHqxMNSiZBNI8yypzRXzhmnX2IQmjbdC71uAczL6uSyHqs_KsnAwAAbY7D.eYMRiIhRWUNZszlDg5rYk2o7ciLJ0U397fLmUw.Iirrx_AcRVBtj6uJt0yXaiBeG4DOMBqZkME5t6CjJ.Um8BKWBLN6dvJYE.0oh1_Xe0cUvodinlfvxt.4zBOgYie.VgSQ7fuUekiraoYxiGnB8ERZDnhoFtXJ7fNXpTn89b6ImbXruKOb0zTqU6iZPRczFBGqc.qEXTUZmD5Pr5VlaviFhQsjJNbkFV8H0NxQ';
+
+// Header giả lập trình duyệt thật kèm Cookie xác minh
 const HTTP_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.9',
+  'Cookie': `cf_clearance=${CF_CLEARANCE_COOKIE}`,
   'Referer': 'https://mlblive.net/'
 };
 
@@ -52,14 +56,13 @@ function parseReleaseDate(title) {
   return new Date().toISOString();
 }
 
-// 💥 HÀM LẤY DATA BẰNG CORSPROXY.IO ĐỂ BYPASS CLOUDFLARE BOT PROTECTION
+// 💥 HÀM REQUEST TRỰC TIẾP DÙNG COOKIE BYPASS CLOUDFLARE
 async function fetchViaCfWorker(targetUrl) {
   try {
-    const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
-    const { data } = await axios.get(proxyUrl, { headers: HTTP_HEADERS, timeout: 15000 });
+    const { data } = await axios.get(targetUrl, { headers: HTTP_HEADERS, timeout: 15000 });
     return data;
   } catch (err) {
-    console.error(`❌ [CORSPROXY ERROR]: ${err.message}`);
+    console.error(`❌ [REQUEST ERROR]: ${err.message}`);
     throw err;
   }
 }
@@ -116,7 +119,7 @@ async function getOkRuDirectUrl(embedUrl) {
 async function fetchDodgersArticles() {
   try {
     console.log(`\n========================================`);
-    console.log(`[SCRAPE REFRESH] Đang cào dữ liệu qua CorsProxy từ:\n${DODGERS_URL}`);
+    console.log(`[SCRAPE REFRESH] Đang cào dữ liệu trực tiếp từ:\n${DODGERS_URL}`);
     
     const data = await fetchViaCfWorker(DODGERS_URL);
     const $ = cheerio.load(data);
@@ -193,7 +196,7 @@ app.get(['/', '/configure'], (req, res) => {
     <body>
       <div class="card">
         <h2>⚾ Dodgers Replays Addon</h2>
-        <div class="status">● ONLINE (v4.1.0 - CorsProxy Bypass)</div>
+        <div class="status">● ONLINE (v4.2.0 - Cookie Bypass)</div>
         <p style="color: #ccc; font-size: 0.95em;">Addon tổng hợp các trận đấu Replay của Los Angeles Dodgers cho Stremio / Nuvio.</p>
         <p style="margin-top: 20px; text-align: left; color: #aaa; font-size: 0.85em;">Link Manifest cài đặt:</p>
         <input type="text" id="link" value="${manifestUrl}" readonly>
@@ -217,7 +220,7 @@ app.get(['/', '/configure'], (req, res) => {
 app.get('/manifest.json', (req, res) => {
   res.json({
     id: 'org.dodgersreplays.gmt7.nhontruong.addon',
-    version: '4.1.0',
+    version: '4.2.0',
     name: 'Dodgers Replays',
     description: 'Tổng hợp toàn bộ trận đấu Replay của Los Angeles Dodgers',
     resources: [
@@ -389,4 +392,4 @@ app.get('/stream/*', async (req, res) => {
 
 const PORT = process.env.PORT || 7000;
 const startPort = process.env.PORT ? process.env.PORT : 7000;
-app.listen(PORT, () => console.log(`Dodgers Replays Addon v4.1.0 running at http://localhost:${startPort}`));
+app.listen(PORT, () => console.log(`Dodgers Replays Addon v4.2.0 running at http://localhost:${startPort}`));
