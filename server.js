@@ -53,6 +53,19 @@ const HTTP_HEADERS = {
   'Referer': 'https://mlblive.net/'
 };
 
+// HÀM HOÀNG GIA: GỬI REQUEST THÔNG QUA CLOUDFLARE WORKER ĐỂ TRÁNH LỖI 403
+async function fetchViaCfWorker(targetUrl) {
+  if (CF_WORKER_URL && CF_WORKER_URL.trim() !== '') {
+    const cleanWorker = CF_WORKER_URL.replace(/\/$/, '');
+    const proxyUrl = `${cleanWorker}?url=${encodeURIComponent(targetUrl)}`;
+    const { data } = await axios.get(proxyUrl, { headers: HTTP_HEADERS, timeout: 10000 });
+    return data;
+  }
+  // Dự phòng nếu không có Worker
+  const { data } = await axios.get(targetUrl, { headers: HTTP_HEADERS, timeout: 10000 });
+  return data;
+}
+
 // HÀM BÓC TÁCH ÉP ƯU TIÊN LẤY LINK MP4 TRỰC TIẾP TỪ OK.RU
 async function getOkRuDirectUrl(embedUrl) {
   try {
@@ -61,10 +74,10 @@ async function getOkRuDirectUrl(embedUrl) {
       targetUrl = targetUrl.replace('ok.ru/video/', 'ok.ru/videoembed/');
     }
 
-    const { data } = await axios.get(targetUrl, { headers: HTTP_HEADERS, timeout: 5000 });
+    const data = await fetchViaCfWorker(targetUrl);
     const $ = cheerio.load(data);
     
-    const dataOptions = $('div[data-module="OKVideo"]').attr('data-options') || $('div[data-options]').attr('data-options');
+    const dataOptions = $('div[data-module="OKVideo"]').attr('data-options') \vert{}\vert{} $('div[data-options]').attr('data-options');
     
     if (dataOptions) {
       const options = JSON.parse(dataOptions);
@@ -97,20 +110,20 @@ async function getOkRuDirectUrl(embedUrl) {
   return null;
 }
 
-// CÀO BÀI VIẾT TỪ MLB LIVE
+// CÀO BÀI VIẾT TỪ MLB LIVE (ĐÃ THAY BẰNG CF WORKER PROXY)
 async function fetchDodgersArticles() {
   try {
     console.log(`\n========================================`);
-    console.log(`[SCRAPE REFRESH] Đang cào danh sách mới nhất từ:\n${DODGERS_URL}`);
+    console.log(`[SCRAPE REFRESH] Đang cào qua Cloudflare Worker từ:\n${DODGERS_URL}`);
     
-    const { data } = await axios.get(DODGERS_URL, { headers: HTTP_HEADERS, timeout: 8000 });
+    const data = await fetchViaCfWorker(DODGERS_URL);
     const $ = cheerio.load(data);
     const articles = [];
     const seenHrefs = new Set();
 
     $('a').each((_, el) => {
       let href = $(el).attr('href');
-      let rawTitle = $(el).text() || $(el).attr('title') || $(el).find('img').attr('alt') || '';
+      let rawTitle = $(el).text() || $(el).attr('title') \vert{}\vert{}$(el).find('img').attr('alt') || '';
       let title = rawTitle.replace(/\s+/g, ' ').trim();
 
       if (!href || !title || title.length < 10) return;
@@ -169,7 +182,7 @@ app.get(['/', '/configure'], (req, res) => {
     <body>
       <div class="card">
         <h2>⚾ Dodgers Replays Addon</h2>
-        <div class="status">● ONLINE (v3.9.0 - CF Worker)</div>
+        <div class="status">● ONLINE (v4.0.0 - CF Bypass)</div>
         <p style="color: #ccc; font-size: 0.95em;">Addon tổng hợp các trận đấu Replay của Los Angeles Dodgers cho Stremio / Nuvio.</p>
         <p style="margin-top: 20px; text-align: left; color: #aaa; font-size: 0.85em;">Link Manifest cài đặt:</p>
         <input type="text" id="link" value="${manifestUrl}" readonly>
@@ -193,7 +206,7 @@ app.get(['/', '/configure'], (req, res) => {
 app.get('/manifest.json', (req, res) => {
   res.json({
     id: 'org.dodgersreplays.gmt7.nhontruong.addon',
-    version: '3.9.0',
+    version: '4.0.0',
     name: 'Dodgers Replays',
     description: 'Tổng hợp toàn bộ trận đấu Replay của Los Angeles Dodgers',
     resources: [
@@ -304,14 +317,14 @@ app.get('/stream/*', async (req, res) => {
     console.log(`\n========================================`);
     console.log(`[STREAM REQUEST] Tập #${epNum} (${targetArticle.title})\nBài viết: ${targetArticle.href}`);
 
-    const { data } = await axios.get(targetArticle.href, { headers: HTTP_HEADERS, timeout: 8000 });
+    const data = await fetchViaCfWorker(targetArticle.href);
     const $ = cheerio.load(data);
     const streams = [];
     const iframeElements = $('iframe').toArray();
 
     for (let index = 0; index < iframeElements.length; index++) {
       const el = iframeElements[index];
-      let src = $(el).attr('src') || $(el).attr('data-src') || $(el).attr('data-lazy-src');
+      let src = $(el).attr('src') || $(el).attr('data-src') \vert{}\vert{}$(el).attr('data-lazy-src');
       
       if (!src) continue;
       if (src.startsWith('//')) src = 'https:' + src;
@@ -366,4 +379,4 @@ app.get('/stream/*', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 7000;
-app.listen(PORT, () => console.log(`Dodgers Replays Addon v3.9.0 running at http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`Dodgers Replays Addon v4.0.0 running at http://localhost:${PORT}`));
