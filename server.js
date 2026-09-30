@@ -18,8 +18,8 @@ app.use(express.static(__dirname));
 
 const DODGERS_URL = 'https://mlblive.net/los-angeles-dodgers-full-game-replay';
 
-// 🔑 ĐIỀN API KEY SCRAPINGANT LẤY TỪ DASHBOARD SCRAPINGANT.COM VÀO ĐÂY
-const SCRAPINGANT_API_KEY = '1751bbe63d6b4b0ab67e948e352be32c';
+// 🔑 DÁN API KEY THẬT CỦA M VÀO GIỮA 2 DẤU NHÁY ĐƠN DƯỚI ĐÂY
+const SCRAPINGANT_API_KEY = process.env.SCRAPINGANT_API_KEY || '1751bbe63d6b4b0ab67e948e352be32c';
 
 // Header giả lập trình duyệt thật
 const HTTP_HEADERS = {
@@ -55,15 +55,20 @@ function parseReleaseDate(title) {
   return new Date().toISOString();
 }
 
-// 💥 HÀM BÀO DATA QUA SCRAPINGANT ĐỂ VƯỢT CLOUDFLARE 100%
+// 💥 HÀM BÀO DATA QUA SCRAPINGANT (DÙNG HEADER X-API-KEY TRÁNH LỖI 422)
 async function fetchViaCfWorker(targetUrl) {
   try {
     console.log(`⏳ [SCRAPINGANT] Đang lấy dữ liệu từ: ${targetUrl}`);
     
-    // Dùng ScrapingAnt API hỗ trợ Headless Browser bypass Cloudflare
-    const apiUrl = `https://api.scrapingant.com/v2/general?apiKey=${SCRAPINGANT_API_KEY}&url=${encodeURIComponent(targetUrl)}&browser=true`;
+    // Đã loại bỏ apiKey trên URL, gửi qua Header x-api-key
+    const apiUrl = `https://api.scrapingant.com/v2/general?url=${encodeURIComponent(targetUrl)}&browser=true`;
     
-    const { data } = await axios.get(apiUrl, { timeout: 35000 });
+    const { data } = await axios.get(apiUrl, {
+      headers: {
+        'x-api-key': SCRAPINGANT_API_KEY
+      },
+      timeout: 45000 
+    });
     return data;
   } catch (err) {
     console.error(`❌ [SCRAPINGANT ERROR]:`, err.response?.data || err.message);
