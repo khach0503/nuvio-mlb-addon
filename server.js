@@ -7,7 +7,7 @@ const cron = require('node-cron');
 const app = express();
 app.use(cors());
 
-// Tắt Cache phía Client/Proxy để Stremio/Nuvio luôn gọi dữ liệu mới
+// Tắt Cache phía Client/Proxy để Stremio/Nuvio luôn nhận link mới
 app.use((req, res, next) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
   res.setHeader('Pragma', 'no-cache');
@@ -19,8 +19,9 @@ app.use(express.static(__dirname));
 
 const DODGERS_URL = 'https://mlblive.net/los-angeles-dodgers-full-game-replay';
 
-// API Key ScrapingAnt (lấy từ biến môi trường Render hoặc điền trực tiếp)
+// Key ScrapingAnt & URL Cloudflare Worker (Lấy từ Environment Variables hoặc điền trực tiếp)
 const SCRAPINGANT_API_KEY = process.env.SCRAPINGANT_API_KEY || '1751bbe63d6b4b0ab67e948e352be32c';
+const CF_WORKER_URL = process.env.CF_WORKER_URL || 'https://curly-credit-e5f0.ntp-ntp2.workers.dev';
 
 // ----------------------------------------------------
 // 🧠 BỘ NHỚ CACHE TRONG RAM
@@ -61,9 +62,8 @@ const HTTP_HEADERS = {
 
 // ⚡ HÀM FETCH (SCRAPINGANT -> AXIOS DIRECT FALLBACK)
 async function fetchWithFallback(targetUrl) {
-  // 1. Dùng ScrapingAnt
   try {
-    if (SCRAPINGANT_API_KEY && SCRAPINGANT_API_KEY !== 'điền_scrapingant_key_ở_đây') {
+    if (SCRAPINGANT_API_KEY && SCRAPINGANT_API_KEY !== '1751bbe63d6b4b0ab67e948e352be32c') {
       console.log(` 🚀 [SCRAPINGANT] Fetching: ${targetUrl}`);
       const antUrl = `https://api.scrapingant.com/v2/general?x-api-key=${SCRAPINGANT_API_KEY}&url=${encodeURIComponent(targetUrl)}&browser=true`;
       const { data } = await axios.get(antUrl, { timeout: 15000 });
@@ -74,7 +74,6 @@ async function fetchWithFallback(targetUrl) {
     console.error(` ⚠️ [SCRAPINGANT FAIL]: ${err.message}`);
   }
 
-  // 2. Axios Direct Fallback (Nếu ScrapingAnt hết credit hoặc lỗi)
   console.log(` ⚠️ [FALLBACK DIRECT] Gọi trực tiếp Axios...`);
   const { data } = await axios.get(targetUrl, { headers: HTTP_HEADERS, timeout: 10000 });
   return data;
@@ -124,10 +123,10 @@ async function getOkRuDirectUrl(embedUrl) {
   return null;
 }
 
-// CÀO DANH SÁCH BÀI VIẾT (CÓ SỬ DỤNG CACHE RAM)
+// CÀO DANH SÁCH BÀI VIẾT (CÓ CACHE RAM)
 async function fetchDodgersArticles(forceRefresh = false) {
   if (!forceRefresh && articlesCache.length > 0) {
-    console.log(`📦 [CACHE HIT] Lấy danh sách trận đấu từ RAM Cache (${articlesCache.length} trận).`);
+    console.log(`📦 [CACHE HIT] Lấy danh sách từ RAM Cache (${articlesCache.length} trận).`);
     return articlesCache;
   }
 
@@ -226,7 +225,7 @@ app.get(['/', '/configure'], (req, res) => {
     <body>
       <div class="card">
         <h2>⚾ Dodgers Replays Addon</h2>
-        <div class="status">● ONLINE (v5.2.0 - ScrapingAnt Only)</div>
+        <div class="status">● ONLINE (v5.3.0 - CF Worker Proxy)</div>
         <p style="color: #ccc; font-size: 0.95em;">Addon tổng hợp các trận đấu Replay của Los Angeles Dodgers cho Stremio / Nuvio.</p>
         <p style="margin-top: 20px; text-align: left; color: #aaa; font-size: 0.85em;">Link Manifest cài đặt:</p>
         <input type="text" id="link" value="${manifestUrl}" readonly>
@@ -250,7 +249,7 @@ app.get(['/', '/configure'], (req, res) => {
 app.get('/manifest.json', (req, res) => {
   res.json({
     id: 'org.dodgersreplays.gmt7.nhontruong.addon',
-    version: '5.2.0',
+    version: '5.3.0',
     name: 'Dodgers Replays',
     description: 'Tổng hợp toàn bộ trận đấu Replay của Los Angeles Dodgers',
     resources: [
@@ -309,42 +308,7 @@ app.get('/meta/*', async (req, res) => {
   }
 });
 
-// 4. Proxy Endpoint
-app.get('/proxy', async (req, res) => {
-  const videoUrl = req.query.url;
-  if (!videoUrl) return res.status(400).send('Missing URL');
-
-  try {
-    const headers = {
-      'User-Agent': HTTP_HEADERS['User-Agent'],
-      'Referer': 'https://ok.ru/'
-    };
-
-    if (req.headers.range) {
-      headers['Range'] = req.headers.range;
-    }
-
-    const response = await axios({
-      method: 'get',
-      url: videoUrl,
-      headers: headers,
-      responseType: 'stream',
-      timeout: 10000
-    });
-
-    res.status(response.status);
-    ['content-type', 'content-length', 'content-range', 'accept-ranges'].forEach(h => {
-      if (response.headers[h]) res.setHeader(h, response.headers[h]);
-    });
-
-    response.data.pipe(res);
-  } catch (err) {
-    console.error('❌ [RENDER PROXY ERROR]:', err.message);
-    res.status(500).send('Proxy Stream Error');
-  }
-});
-
-// 5. Stream Endpoint
+// 4. Stream Endpoint
 app.get('/stream/*', async (req, res) => {
   try {
     const cleanId = extractCleanId(req);
@@ -361,7 +325,7 @@ app.get('/stream/*', async (req, res) => {
     console.log(`\n========================================`);
     console.log(`[STREAM REQUEST] Tập #${epNum} (${targetArticle.title})`);
 
-    // Kiểm tra Cache Stream của trận này
+    // Kiểm tra Cache Stream
     if (okRuStreamsCache.has(targetArticle.href)) {
       console.log(` 📦 [CACHE HIT STREAM] Lấy link stream từ RAM Cache.`);
       const cachedStreams = okRuStreamsCache.get(targetArticle.href);
@@ -393,10 +357,9 @@ app.get('/stream/*', async (req, res) => {
         const directMediaUrl = await getOkRuDirectUrl(src);
         
         if (directMediaUrl) {
-          const host = req.get('host');
-          const protocol = req.protocol;
-          streamUrl = `${protocol}://${host}/proxy?url=${encodeURIComponent(directMediaUrl)}`;
-          console.log(` ➔ [USING RENDER PROXY]: ${streamUrl}`);
+          // Gửi link qua Cloudflare Worker để stream
+          streamUrl = `${CF_WORKER_URL}?url=${encodeURIComponent(directMediaUrl)}`;
+          console.log(` ➔ [USING CLOUDFLARE WORKER PROXY]: ${streamUrl}`);
         } else {
           if (src.includes('ok.ru/video/')) {
             streamUrl = src.replace('ok.ru/video/', 'ok.ru/videoembed/');
@@ -408,11 +371,7 @@ app.get('/stream/*', async (req, res) => {
         title: serverName,
         url: streamUrl,
         behaviorHints: {
-          notSupported: false,
-          requestHeaders: {
-            'User-Agent': HTTP_HEADERS['User-Agent'],
-            'Referer': 'https://mlblive.net/'
-          }
+          notSupported: false
         }
       });
     }
@@ -434,7 +393,7 @@ app.get('/stream/*', async (req, res) => {
 
 const PORT = process.env.PORT || 7000;
 app.listen(PORT, async () => {
-  console.log(`Dodgers Replays Addon v5.2.0 running at port ${PORT}`);
+  console.log(`Dodgers Replays Addon v5.3.0 running at port ${PORT}`);
   console.log(`🚀 [SERVER STARTUP] Đang khởi tạo Cache ban đầu...`);
   await fetchDodgersArticles(true);
 });
