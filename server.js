@@ -63,7 +63,7 @@ const HTTP_HEADERS = {
 // ⚡ HÀM FETCH (SCRAPINGANT -> AXIOS DIRECT FALLBACK)
 async function fetchWithFallback(targetUrl) {
   try {
-    if (SCRAPINGANT_API_KEY && SCRAPINGANT_API_KEY !== '1751bbe63d6b4b0ab67e948e352be32c') {
+    if (SCRAPINGANT_API_KEY && SCRAPINGANT_API_KEY !== 'dien key') {
       console.log(` 🚀 [SCRAPINGANT] Fetching: ${targetUrl}`);
       const antUrl = `https://api.scrapingant.com/v2/general?x-api-key=${SCRAPINGANT_API_KEY}&url=${encodeURIComponent(targetUrl)}&browser=true`;
       const { data } = await axios.get(antUrl, { timeout: 15000 });
