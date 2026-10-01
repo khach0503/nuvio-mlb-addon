@@ -20,7 +20,7 @@ app.use(express.static(__dirname));
 const DODGERS_URL = 'https://mlblive.net/los-angeles-dodgers-full-game-replay';
 
 // API Key ScrapingAnt (lấy từ biến môi trường Render hoặc điền trực tiếp)
-const SCRAPINGANT_API_KEY = process.env.SCRAPINGANT_API_KEY || 'điền_scrapingant_key_ở_đây';
+const SCRAPINGANT_API_KEY = process.env.SCRAPINGANT_API_KEY || '1751bbe63d6b4b0ab67e948e352be32c';
 
 // ----------------------------------------------------
 // 🧠 BỘ NHỚ CACHE TRONG RAM
