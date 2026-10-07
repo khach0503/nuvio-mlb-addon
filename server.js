@@ -20,12 +20,11 @@ app.use(express.static(__dirname));
 const DODGERS_URL = 'https://mlblive.net/los-angeles-dodgers-full-game-replay';
 
 // Key ScrapingAnt & URL Cloudflare Worker (Lấy từ Environment Variables hoặc điền trực tiếp)
-const SCRAPINGANT_API_KEY = process.env.SCRAPINGANT_API_KEY || 'dien_scrapingant_key_o_day';
-const CF_WORKER_URL = process.env.CF_WORKER_URL || 'https://link-worker-cloudflare-cua-m.workers.dev';
+const SCRAPINGANT_API_KEY = process.env.SCRAPINGANT_API_KEY || '1751bbe63d6b4b0ab67e948e352be32c';
+const CF_WORKER_URL = process.env.CF_WORKER_URL || 'https://curly-credit-e5f0.ntp-ntp2.workers.dev';
 
 // ----------------------------------------------------
 // 🧠 BỘ NHỚ CACHE TRONG RAM
-// ----------------------------------------------------
 let articlesCache = [];             // Lưu danh sách bài viết/trận đấu
 let okRuStreamsCache = new Map();   // Lưu link MP4 direct của từng trận
 
