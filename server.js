@@ -94,7 +94,7 @@ async function getOkRuDirectUrl(embedUrl) {
     let metadata = null;
 
     // Cách 1: Tìm trong data-options của div OKVideo
-    let dataOptions = $('div[data-module="OKVideo"]').attr('data-options') \vert{}\vert{} $('div[data-options]').attr('data-options');
+    let dataOptions = $('div[data-module="OKVideo"]').attr('data-options') || $('div[data-options]').attr('data-options');
     
     if (dataOptions) {
       try {
