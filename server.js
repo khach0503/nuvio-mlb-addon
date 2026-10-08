@@ -366,7 +366,7 @@ app.get('/stream/*', async (req, res) => {
 
     for (let index = 0; index < iframeElements.length; index++) {
       const el = iframeElements[index];
-      let src = $(el).attr('src') || $(el).attr('data-src') \vert{}\vert{}$(el).attr('data-lazy-src');
+      let src = $(el).attr('src') || $(el).attr('data-src') ||$(el).attr('data-lazy-src');
       
       if (!src) continue;
       if (src.startsWith('//')) src = 'https:' + src;
