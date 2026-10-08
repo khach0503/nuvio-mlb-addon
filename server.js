@@ -25,6 +25,7 @@ const CF_WORKER_URL = process.env.CF_WORKER_URL || 'https://curly-credit-e5f0.nt
 
 // ----------------------------------------------------
 // 🧠 BỘ NHỚ CACHE TRONG RAM
+// ----------------------------------------------------
 let articlesCache = [];             // Lưu danh sách bài viết/trận đấu
 let okRuStreamsCache = new Map();   // Lưu link MP4 direct của từng trận
 
@@ -78,7 +79,7 @@ async function fetchWithFallback(targetUrl) {
   return data;
 }
 
-// BÓC TÁCH LINK OK.RU ĐỂ LẤY LINK DIRECT MP4 / HLS (Nâng cấp v5.3.1 - Chống xịt)
+// BÓC TÁCH LINK OK.RU - CHỈ LẤY MP4 DIRECT (Nâng cấp v5.4.0)
 async function getOkRuDirectUrl(embedUrl) {
   try {
     let targetUrl = embedUrl;
@@ -92,9 +93,8 @@ async function getOkRuDirectUrl(embedUrl) {
     const $ = cheerio.load(data);
     let metadata = null;
 
-    // Cách 1: Tìm trong data-options của div OKVideo
-    let dataOptions = $('div[data-module="OKVideo"]').attr('data-options') || $('div[data-options]').attr('data-options');
-    
+    // Cách 1: Parse từ data-options
+    let dataOptions = $('div[data-module="OKVideo"]').attr('data-options') \vert{}\vert{} $('div[data-options]').attr('data-options');
     if (dataOptions) {
       try {
         const options = JSON.parse(dataOptions);
@@ -102,49 +102,45 @@ async function getOkRuDirectUrl(embedUrl) {
         if (metadataStr) {
           metadata = typeof metadataStr === 'string' ? JSON.parse(metadataStr) : metadataStr;
         }
-      } catch (e) {
-        console.error(' ⚠️ Lỗi parse JSON data-options:', e.message);
-      }
+      } catch (e) {}
     }
 
-    // Cách 2: Nếu không thấy data-options, quét Regex trong thẻ <script>
+    // Cách 2: Quét qua các thẻ <script> (Tránh lỗi Regex)
     if (!metadata) {
-      const htmlText = $.html();
-      const metadataMatch = htmlText.match(/\"metadata\"\s*:\s*(\"{.*?}\"|{.*?})/s);
-      if (metadataMatch && metadataMatch[1]) {
-        try {
-          let rawMeta = metadataMatch[1];
-          if (rawMeta.startsWith('"') && rawMeta.endsWith('"')) {
-            rawMeta = JSON.parse(rawMeta);
+      $('script').each((_, script) => {
+        if (metadata) return;
+        const content = $(script).html();
+        if (content && content.includes('metadata')) {
+          const startIdx = content.indexOf('"metadata":');
+          if (startIdx !== -1) {
+            const subStr = content.substring(startIdx + 11);
+            const match = subStr.match(/^("[^"]+"|\{[\s\S]*?\n\s*\})/);
+            if (match) {
+              try {
+                let rawMeta = match[1];
+                if (rawMeta.startsWith('"') && rawMeta.endsWith('"')) {
+                  rawMeta = JSON.parse(rawMeta);
+                }
+                metadata = typeof rawMeta === 'string' ? JSON.parse(rawMeta) : rawMeta;
+              } catch (e) {}
+            }
           }
-          metadata = typeof rawMeta === 'string' ? JSON.parse(rawMeta) : rawMeta;
-        } catch (e) {
-          console.error(' ⚠️ Lỗi parse Regex script metadata:', e.message);
         }
+      });
+    }
+
+    // Lọc duy nhất link MP4 (TỪ BỎ M3U8 VÀ EMBED)
+    if (metadata && metadata.videos && metadata.videos.length > 0) {
+      const mp4Videos = metadata.videos.filter(v => v.url && v.url.startsWith('http') && !v.url.includes('.m3u8'));
+      if (mp4Videos.length > 0) {
+        const bestMp4 = mp4Videos[mp4Videos.length - 1]; // Lấy bản chất lượng cao nhất
+        const videoName = bestMp4.name ? bestMp4.name.toUpperCase() : 'HD';
+        console.log(` ⚡ [PARSER OK.RU SUCCESS] Tìm thấy MP4 Direct (${videoName}): ${bestMp4.url}`);
+        return bestMp4.url;
       }
     }
 
-    // Trích xuất link từ Metadata
-    if (metadata) {
-      // 1. Ưu tiên lấy MP4 direct chất lượng cao nhất
-      if (metadata.videos && metadata.videos.length > 0) {
-        const mp4Videos = metadata.videos.filter(v => v.url && v.url.startsWith('http') && !v.url.includes('.m3u8'));
-        if (mp4Videos.length > 0) {
-          const bestMp4 = mp4Videos[mp4Videos.length - 1];
-          const videoName = bestMp4.name ? bestMp4.name.toUpperCase() : 'HD';
-          console.log(` ⚡ [PARSER OK.RU SUCCESS] MP4 (${videoName}): ${bestMp4.url}`);
-          return bestMp4.url;
-        }
-      }
-
-      // 2. Fallback sang HLS Manifest (.m3u8) nếu không có MP4 direct
-      if (metadata.hlsManifestUrl) {
-        console.log(` ⚡ [PARSER OK.RU SUCCESS] Fallback HLS (m3u8): ${metadata.hlsManifestUrl}`);
-        return metadata.hlsManifestUrl;
-      }
-    } else {
-      console.warn(` ⚠️ [PARSER OK.RU WARNING] Không tìm thấy metadata trong HTML: ${targetUrl}`);
-    }
+    console.warn(` ⚠️ [PARSER OK.RU SKIP] Không tìm thấy link MP4 direct nào: ${targetUrl}`);
   } catch (err) {
     console.error(`⚠️ [PARSER OK.RU FAIL]:`, err.message);
   }
@@ -253,7 +249,7 @@ app.get(['/', '/configure'], (req, res) => {
     <body>
       <div class="card">
         <h2>⚾ Dodgers Replays Addon</h2>
-        <div class="status">● ONLINE (v5.3.1 - Enhanced Parser)</div>
+        <div class="status">● ONLINE (v5.4.0 - Multi-Video MP4 Direct)</div>
         <p style="color: #ccc; font-size: 0.95em;">Addon tổng hợp các trận đấu Replay của Los Angeles Dodgers cho Stremio / Nuvio.</p>
         <p style="margin-top: 20px; text-align: left; color: #aaa; font-size: 0.85em;">Link Manifest cài đặt:</p>
         <input type="text" id="link" value="${manifestUrl}" readonly>
@@ -277,7 +273,7 @@ app.get(['/', '/configure'], (req, res) => {
 app.get('/manifest.json', (req, res) => {
   res.json({
     id: 'org.dodgersreplays.gmt7.nhontruong.addon',
-    version: '5.3.1',
+    version: '5.4.0',
     name: 'Dodgers Replays',
     description: 'Tổng hợp toàn bộ trận đấu Replay của Los Angeles Dodgers',
     resources: [
@@ -336,7 +332,7 @@ app.get('/meta/*', async (req, res) => {
   }
 });
 
-// 4. Stream Endpoint
+// 4. Stream Endpoint (Hỗ trợ cào đa video trong cùng 1 bài viết)
 app.get('/stream/*', async (req, res) => {
   try {
     const cleanId = extractCleanId(req);
@@ -355,58 +351,50 @@ app.get('/stream/*', async (req, res) => {
 
     // Kiểm tra Cache Stream
     if (okRuStreamsCache.has(targetArticle.href)) {
-      console.log(` 📦 [CACHE HIT STREAM] Lấy link stream từ RAM Cache.`);
-      const cachedStreams = okRuStreamsCache.get(targetArticle.href);
-      return res.json({ streams: cachedStreams });
+      console.log(` 📦 [CACHE HIT STREAM] Lấy danh sách stream từ RAM Cache.`);
+      return res.json({ streams: okRuStreamsCache.get(targetArticle.href) });
     }
 
-    console.log(` 🚀 [SCRAPE STREAM] Bắt đầu check link OK.ru...`);
+    console.log(` 🚀 [SCRAPE STREAM] Đang tìm toàn bộ iframe video trong bài...`);
     const data = await fetchWithFallback(targetArticle.href);
     const $ = cheerio.load(data);
     const streams = [];
+    
+    // Tìm tất cả các thẻ iframe có trong bài viết
     const iframeElements = $('iframe').toArray();
+    let videoIndex = 1;
 
     for (let index = 0; index < iframeElements.length; index++) {
       const el = iframeElements[index];
-      let srcAttr = $(el).attr('src');
-      let dataSrcAttr = $(el).attr('data-src');
-      let lazySrcAttr = $(el).attr('data-lazy-src');
-      
-      let src = srcAttr ? srcAttr : (dataSrcAttr ? dataSrcAttr : lazySrcAttr);
+      let src = $(el).attr('src') || $(el).attr('data-src') \vert{}\vert{}$(el).attr('data-lazy-src');
       
       if (!src) continue;
       if (src.startsWith('//')) src = 'https:' + src;
 
-      let streamUrl = src;
-      let serverName = `Server #${index + 1}`;
-
+      // Chỉ xử lý các iframe từ OK.ru
       if (src.includes('ok.ru')) {
-        serverName = `⚡ OK.ru Fast Direct #${index + 1}`;
-        const directMediaUrl = await getOkRuDirectUrl(src);
+        console.log(` 🔎 Đang giải mã Video OK.ru #${videoIndex}...`);
+        const directMp4Url = await getOkRuDirectUrl(src);
         
-        if (directMediaUrl) {
-          // Gửi link qua Cloudflare Worker Proxy
-          streamUrl = `${CF_WORKER_URL}?url=${encodeURIComponent(directMediaUrl)}`;
-          console.log(` ➔ [USING CLOUDFLARE WORKER PROXY]: ${streamUrl}`);
-        } else {
-          // Fallback sang link Embed iframe nếu không bóc được MP4
-          console.log(` ⚠️ [FALLBACK EMBED]: Dùng link embed iframe gốc của OK.ru.`);
-          streamUrl = src.includes('ok.ru/video/') ? src.replace('ok.ru/video/', 'ok.ru/videoembed/') : src;
+        // NẾU CÓ LINK MP4 DIRECT -> THÊM VÀO DANH SÁCH STREAM
+        if (directMp4Url) {
+          const proxiedUrl = `${CF_WORKER_URL}?url=${encodeURIComponent(directMp4Url)}`;
+          streams.push({
+            title: `⚡ OK.ru Direct MP4 - Video #${videoIndex}`,
+            url: proxiedUrl,
+            behaviorHints: { notSupported: false }
+          });
+          videoIndex++;
         }
       }
-
-      streams.push({
-        title: serverName,
-        url: streamUrl,
-        behaviorHints: {
-          notSupported: false
-        }
-      });
     }
 
+    // Nếu cào thành công thì lưu danh sách stream vào RAM Cache
     if (streams.length > 0) {
       okRuStreamsCache.set(targetArticle.href, streams);
-      console.log(` 💾 [CACHE STORED] Đã lưu link stream trận này vào Cache.`);
+      console.log(` 💾 [CACHE STORED] Đã lưu ${streams.length} link MP4 vào Cache.`);
+    } else {
+      console.log(` ⚠️ [NO DIRECT MP4] Bài viết này không có video MP4 direct nào.`);
     }
 
     console.log(`[STREAM SUCCESS] Trả về ${streams.length} luồng stream.`);
@@ -421,7 +409,7 @@ app.get('/stream/*', async (req, res) => {
 
 const PORT = process.env.PORT || 7000;
 app.listen(PORT, async () => {
-  console.log(`Dodgers Replays Addon v5.3.1 running at port ${PORT}`);
+  console.log(`Dodgers Replays Addon v5.4.0 running at port ${PORT}`);
   console.log(`🚀 [SERVER STARTUP] Đang khởi tạo Cache ban đầu...`);
   await fetchDodgersArticles(true);
 });
